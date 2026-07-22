@@ -1,0 +1,6 @@
+pypdf
+pydantic
+python-dotenv
+langchain-ollama
+langchain-openai
+langchain-huggingface
