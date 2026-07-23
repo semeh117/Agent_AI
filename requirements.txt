@@ -4,3 +4,4 @@ python-dotenv
 langchain-ollama
 langchain-openai
 langchain-huggingface
+requests==2.32.3

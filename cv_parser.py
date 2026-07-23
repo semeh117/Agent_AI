@@ -46,8 +46,9 @@ class CVInfo(BaseModel):
     github : Optional[str] = Field(default=None, description="GitHub profile URL if found, else null.")
 
 
-def extract_cv_info(cv_text: str) -> CVInfo:
-    llm = get_llm(temperature=0.0)
+def extract_cv_info(cv_text: str, llm=None) -> CVInfo:
+    if llm is None:
+        llm = get_llm(temperature=0.0)
     structured_llm = llm.with_structured_output(CVInfo)
 
     prompt = f"""You are parsing a CV. You MUST read the ENTIRE document below,
