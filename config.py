@@ -17,13 +17,7 @@ def get_llm(temperature: float = 0.0):
             temperature=temperature,
             api_key=os.getenv("OPENAI_API_KEY"),
         )
-    elif LLM_PROVIDER == "ollama":
-        from langchain_ollama import ChatOllama
-        return ChatOllama(
-            model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            temperature=temperature,
-        )
+   
     elif LLM_PROVIDER == "openrouter":
         from langchain_openai import ChatOpenAI
         # OpenRouter exposes an OpenAI-compatible API, so we reuse ChatOpenAI

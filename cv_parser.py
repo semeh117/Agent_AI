@@ -37,6 +37,16 @@ class CVInfo(BaseModel):
                     "languages, frameworks, methodologies). Short entries, e.g. 'Python'."
     )
     job_titles: List[str] = Field(description="Past job titles/roles/internships held.")
+    experience_months: Optional[int] = Field(
+    default=None,
+    description="Total months of professional work experience (including "
+                "internships, freelance, and full-time roles), summed from "
+                "the dated entries in the Experience section. Calculate each "
+                "entry's duration from its start/end dates (use the current "
+                "date for entries marked 'Present'). Do not exclude internships "
+                "— count all listed professional roles. Return 0 only if the "
+                "Experience section is genuinely empty."
+   )
     experience_years: Optional[int] = Field(
         default=None, description="Estimated total years of professional experience. Null if unclear."
     )
