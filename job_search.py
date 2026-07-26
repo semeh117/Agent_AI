@@ -1,58 +1,82 @@
 """
 job_search.py
 --------------
-Real job search via the Adzuna API — no scraping, legitimate REST API,
-returns real live job postings (title, company, description, url).
+Real job search via RemoteOK's public API. Free, no API key required.
+Unlike Adzuna, RemoteOK returns FULL job descriptions (not truncated
+snippets), which is essential for reliable skill extraction.
 """
 
-import os
+import html
+import re
+import json
 import requests
 from langchain_core.tools import tool
 
-ADZUNA_APP_ID = os.getenv("ADZUNA_APP_ID")
-ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY")
-ADZUNA_COUNTRY = os.getenv("ADZUNA_COUNTRY", "gb")
-ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs"
+
+def _clean_description(raw_html: str) -> str:
+    """
+    Strips HTML tags and RemoteOK's anti-bot honeypot text (an instruction
+    like "mention the word X when applying" injected into every posting
+    to detect scrapers) so it doesn't get mistaken for a real requirement.
+    """
+HIMALAYAS_SEARCH_URL = "https://himalayas.app/jobs/api/search"
+
+
+def _clean_description(raw_html: str) -> str:
+    """Strips HTML tags from the description for clean LLM input."""
+    text = re.sub(r"<[^>]+>", " ", raw_html)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 @tool
 def search_real_jobs(query: str, results_count: int = 5) -> str:
     """
-    Searches for real, currently active job postings using the Adzuna API.
+    Searches Himalayas for real, currently active remote job postings
+    using their built-in keyword search (not client-side filtering).
 
     Input:
-        query: search terms, e.g. "Data Scientist Machine Learning"
+        query: search terms, e.g. "full stack developer"
         results_count: how many postings to return (default 5, max 20)
 
-    Output: JSON string — a list of job postings, each with:
-        title, company, location, description, url, salary (if available)
+    Output: JSON string — list of job postings, each with:
+        title, company, employment_type, seniority, full cleaned
+        description, categories, url, salary (if available).
     """
-    url = f"{ADZUNA_BASE_URL}/{ADZUNA_COUNTRY}/search/1"
     params = {
-        "app_id": ADZUNA_APP_ID,
-        "app_key": ADZUNA_APP_KEY,
-        "results_per_page": min(results_count, 20),
-        "what": query,
-        "content-type": "application/json",
+        "q": query,
+        "limit": min(results_count, 20),
+        "page": 1,
     }
 
-    response = requests.get(url, params=params, timeout=15)
-
+    response = requests.get(HIMALAYAS_SEARCH_URL, params=params, timeout=15)
     if response.status_code != 200:
-        return f'{{"error": "Adzuna API returned status {response.status_code}: {response.text[:200]}"}}'
+        return f'{{"error": "Himalayas API returned status {response.status_code}"}}'
 
     data = response.json()
+
+    # Himalayas' `limit` param doesn't reliably cap results server-side,
+    # so we enforce the limit ourselves by slicing the raw list BEFORE
+    # the loop, not inside it.
+    raw_jobs = data.get("jobs", [])[:results_count]
+
     jobs = []
-    for job in data.get("results", []):
+    for job in raw_jobs:
         jobs.append({
             "title": job.get("title", ""),
-            "company": job.get("company", {}).get("display_name", "Unknown"),
-            "location": job.get("location", {}).get("display_name", "Unknown"),
-            "description": job.get("description", ""),
-            "url": job.get("redirect_url", ""),
-            "salary_min": job.get("salary_min"),
-            "salary_max": job.get("salary_max"),
+            "company": job.get("companyName", ""),
+            "employment_type": job.get("employmentType", ""),
+            "seniority": job.get("seniority", []),
+            "description": _clean_description(job.get("description", "")),
+            "categories": job.get("categories", []),
+            "requirements": job.get("requirements", []),
+            "skills": job.get("skills", []),
+            "url": job.get("applicationLink", ""),
+            "salary_min": job.get("minSalary"),
+            "salary_max": job.get("maxSalary"),
         })
 
-    import json
-    return json.dumps(jobs, indent=2)
+    # ONE print, after the loop, not inside it
+    print(f"Loaded {len(jobs)} jobs from Himalayas API for query '{query}'")
+
+    return json.dumps(jobs, indent=2, ensure_ascii=False)

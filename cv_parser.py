@@ -14,10 +14,6 @@ from config import get_llm
 
 
 def extract_text_from_pdf(pdf_source) -> str:
-    """
-    pdf_source: file path (str) or file-like object (Streamlit UploadedFile).
-    pypdf's PdfReader accepts both.
-    """
     reader = PdfReader(pdf_source)
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     text = text.strip()
@@ -37,23 +33,26 @@ class CVInfo(BaseModel):
                     "languages, frameworks, methodologies). Short entries, e.g. 'Python'."
     )
     job_titles: List[str] = Field(description="Past job titles/roles/internships held.")
-    experience_months: Optional[int] = Field(
-    default=None,
-    description="Total months of professional work experience (including "
-                "internships, freelance, and full-time roles), summed from "
-                "the dated entries in the Experience section. Calculate each "
-                "entry's duration from its start/end dates (use the current "
-                "date for entries marked 'Present'). Do not exclude internships "
-                "— count all listed professional roles. Return 0 only if the "
-                "Experience section is genuinely empty."
-   )
-    experience_years: Optional[int] = Field(
-        default=None, description="Estimated total years of professional experience. Null if unclear."
+    experience_years: Optional[float] = Field(
+        default=None,
+        description="Total years of professional experience, summed from actual "
+                    "dated Experience entries (include internships/freelance — do "
+                    "NOT exclude by title wording, use real durations). 0 if none."
     )
     education: List[str] = Field(default_factory=list, description="Degrees/certifications mentioned.")
-    linkedin : Optional[str] = Field(default=None, description="LinkedIn profile URL if found, else null.")
-    mail : Optional[str] = Field(default=None, description="Email address if found, else null.")
-    github : Optional[str] = Field(default=None, description="GitHub profile URL if found, else null.")
+    highest_education_level: Optional[str] = Field(
+        default=None,
+        description="The candidate's highest completed OR in-progress education "
+                    "level, normalized to exactly one of: 'High School', "
+                    "'Bachelor', 'Master', 'PhD'. For an ongoing multi-year "
+                    "engineering/university program, infer the level it leads to "
+                    "(e.g. a 5-year integrated engineering degree -> 'Master'). "
+                    "Null only if genuinely no education is mentioned."
+    )
+    phone: Optional[str] = Field(default=None, description="Phone number if found, else null.")
+    linkedin: Optional[str] = Field(default=None, description="LinkedIn profile URL if found, else null.")
+    mail: Optional[str] = Field(default=None, description="Email address if found, else null.")
+    github: Optional[str] = Field(default=None, description="GitHub profile URL if found, else null.")
 
 
 def extract_cv_info(cv_text: str, llm=None) -> CVInfo:
@@ -76,9 +75,21 @@ Extract:
   a technical CV like this one.
 - job_titles: actual roles/positions/internships held (found under
   "Experience"), NOT a professional tagline or headline.
-- experience_years: estimate from Experience section dates only; null if
-  the candidate has no significant professional history yet (e.g. student).
-- education: degrees, specializations, and certifications.
+- experience_years: sum the actual duration of EVERY entry in the
+  Experience section from its stated dates (use today's date for entries
+  marked "Present"). Include internships and freelance work — do NOT
+  exclude time just because a role is titled "Internship". Return 0 only
+  if there is no Experience section at all.
+- education: degrees, specializations, and certifications, as listed.
+- highest_education_level: normalize the candidate's highest level to
+  exactly one of 'High School', 'Bachelor', 'Master', 'PhD' — even if the
+  CV describes it differently (e.g. a 5-year "Integrated Engineering
+  Cycle" culminating in an engineering degree should map to 'Master',
+  since it's equivalent to a Bachelor's + Master's combined).
+-linkedin: LinkedIn profile URL if found, else null.
+-mail: Email address if found, else null.
+-phone: Phone number if found, else null.
+-github: GitHub profile URL if found, else null.
 
 Note:
 -raw text may have minor extraction artifacts (missing spaces between
@@ -89,7 +100,15 @@ CV TEXT:
 ---
 {cv_text}
 ---"""
-    result = structured_llm.invoke(prompt)
+    try:
+        result = structured_llm.invoke(prompt)
+    except Exception as e:
+        print(f"  [WARN] CV extraction failed (likely token limit): {str(e)[:150]}")
+        # Return an empty/minimal CVInfo rather than crashing the whole pipeline
+        return CVInfo(full_name=None, skills=[], job_titles=[],
+                       experience_years=None, education=[],
+                       highest_education_level=None)
+
     seen = set()
     deduped = []
     for s in result.skills:
@@ -99,6 +118,8 @@ CV TEXT:
             deduped.append(s.strip())
     result.skills = deduped
     return result
+
+
 def verify_skills_grounded(skills: list[str], raw_text: str) -> list[str]:
     """
     Keeps only skills that actually appear (case-insensitive substring match)

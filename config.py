@@ -27,6 +27,9 @@ def get_llm(temperature: float = 0.0):
             temperature=temperature,
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
+            max_tokens=8192,
+            max_retries=3,
+
         )
     elif LLM_PROVIDER == "groq":
         from langchain_openai import ChatOpenAI
