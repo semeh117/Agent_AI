@@ -14,7 +14,7 @@ skill that isn't in either list, it can only judge equivalence between
 things that are already real.
 """
 
-from typing import List, Dict
+from typing import List
 from pydantic import BaseModel, Field
 from config import get_llm
 

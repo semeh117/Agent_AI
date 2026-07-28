@@ -6,24 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from job_parser import extract_job_requirements
 
-title = "Backend Developer"
-description = """This is a remote position. We are seeking a talented and motivated 
-Backend Engineer to join our client dynamic team. As a Backend Engineer, you will be 
-responsible for developing and maintaining our backend services, ensuring they are 
-scalable, robust, and efficient. You will work closely with our client's team to deliver 
-high-quality solutions that meet our client users' needs. Key Responsibilities Develop, 
-maintain, and optimize backend services and APIs. Collaborate with frontend-developers 
-to integrate user-facing elements with server-side logic. Ensure the scalability and 
-performance of applications. Write clean, maintainable, and efficient code. Troubleshoot 
-and debug applications. Participate in code reviews and contribute to a high-performing 
-team culture. Implement security and data protection measures. Stay up-to-date with 
-emerging technologies and industry trends Requirements Proven experience as a Backend 
-Engineer or similar role. Proficiency in Go is preferred; experience with PHP, Python, 
-or other languages is acceptable depending on the candidate. Experience with AWS 
-(Amazon Web Services) is preferred. Strong understanding of RESTful APIs and web 
-services. Familiarity with database technologies such as SQL, NoSQL, and in-memory 
-databases. Knowledge of version control systems (e.g., Git). Excellent problem-solving 
-skills and attention to detail. Strong communication skills and fluency in English."""
-
+title = "AI/ML Engineer"
+description = """Seeking a passionate, hands on technical AI /ML engineer to join our growing team and solve exciting engineering problems in semiconductor space. The nature of problems are wide ranging giving an opportunity to grow continuously. This position will work closely with multidisciplinary team, product managers, Data engineers, data scientists, and business stakeholders to bring AI solutions to production. Key Responsibilities Design and Develop ML Models for high impact engineering solutions. Build, train, and optimize machine learning and deep learning models to solve complex problems using natural language processing, computer vision, and predictive analytics. Knowledge of python, Pytorch, agentic frameworks, Langchain, RAG, capability to understand and build deep learning models on cloud or on premises compute. Data Collection and Preprocessing: Python preprocessing for structured and unstructured data [numeric, images, videos and documents) Feature Engineering: Identify, extract, and transform relevant features from raw data to improve model performance and interpretability. Model Evaluation and monitoring: Assess model accuracy and robustness using statistical metrics and validation techniques. Deployment and Integration: Knowledge of Kubernetes, Flask, Ray Serve, Azure Devops, ONNX, or cloud-based solutions. . Research and Innovation: Stay abreast of the latest developments in AI/ML research and technologies. Experiment with new algorithms, tools, and frameworks to drive innovation and maintain a competitive edge. Documentation and Reporting: Create comprehensive documentation of model architecture, data sources, training processes, and evaluation metrics. Present findings and recommendations to both technical and non-technical audiences. Ethics and Compliance: Uphold ethical standards and ensure compliance with regulations governing data privacy, security, and responsible AI deployment. Qualifications Education: Bachelor’s or Master’s degree in Computer Science, Engineering, Mathematics, Statistics, or a related field. 3+ years of professional experience in machine learning, artificial intelligence, or related fields. A PhD or relevant research experience would be a plus"""
 result = extract_job_requirements(title, description)
 print(result.model_dump_json(indent=2))

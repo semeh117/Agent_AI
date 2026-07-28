@@ -49,15 +49,12 @@ def search_real_jobs(query: str, results_count: int = 5) -> str:
         "page": 1,
     }
 
-    response = requests.get(HIMALAYAS_SEARCH_URL, params=params, timeout=15)
+    response = requests.get(HIMALAYAS_SEARCH_URL, params=params, timeout=30)
     if response.status_code != 200:
         return f'{{"error": "Himalayas API returned status {response.status_code}"}}'
 
     data = response.json()
 
-    # Himalayas' `limit` param doesn't reliably cap results server-side,
-    # so we enforce the limit ourselves by slicing the raw list BEFORE
-    # the loop, not inside it.
     raw_jobs = data.get("jobs", [])[:results_count]
 
     jobs = []
