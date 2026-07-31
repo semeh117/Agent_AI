@@ -1,9 +1,13 @@
 pypdf
 pydantic
 python-dotenv
+requests==2.32.3
+
+langchain==0.3.7
+langgraph
 langchain-ollama
 langchain-openai
 langchain-huggingface
-requests==2.32.3
+
 numpy
 sentence-transformers
