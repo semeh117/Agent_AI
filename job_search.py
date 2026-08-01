@@ -1,9 +1,11 @@
 """
 job_search.py
 --------------
-Real job search via RemoteOK's public API. Free, no API key required.
-Unlike Adzuna, RemoteOK returns FULL job descriptions (not truncated
-snippets), which is essential for reliable skill extraction.
+Real job search via Himalayas' public API. Free, no API key required.
+Himalayas returns FULL job descriptions (not truncated snippets), which
+is essential for reliable skill extraction, and uses proper server-side
+keyword search — unlike RemoteOK, which was dropped after an AND/OR
+matching bug, and Adzuna, which was dropped for truncated descriptions.
 """
 
 import html
@@ -12,13 +14,6 @@ import json
 import requests
 from langchain_core.tools import tool
 
-
-def _clean_description(raw_html: str) -> str:
-    """
-    Strips HTML tags and RemoteOK's anti-bot honeypot text (an instruction
-    like "mention the word X when applying" injected into every posting
-    to detect scrapers) so it doesn't get mistaken for a real requirement.
-    """
 HIMALAYAS_SEARCH_URL = "https://himalayas.app/jobs/api/search"
 
 
@@ -73,7 +68,6 @@ def search_real_jobs(query: str, results_count: int = 5) -> str:
             "salary_max": job.get("maxSalary"),
         })
 
-    # ONE print, after the loop, not inside it
     print(f"Loaded {len(jobs)} jobs from Himalayas API for query '{query}'")
 
     return json.dumps(jobs, indent=2, ensure_ascii=False)

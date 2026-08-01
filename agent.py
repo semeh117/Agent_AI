@@ -48,9 +48,9 @@ STRICT WORKFLOW — follow this exactly:
 2. For EACH job object in the list, call evaluate_job_match with that
    SINGLE job object as a JSON string. Call it once per job — do not
    batch multiple jobs into one call.
-3. Collect all scores from evaluate_job_match results.
-4. how much experience needs to be gained to meet the requirement, and whether the candidate's
-6. Write your Final Answer: the ranked list with percentages , plus 2-3
+3. Collect all scores from evaluate_job_match results and rabk the jobs from best to worst match. :
+4. how much experience needs to be gained to meet the job requirements for example if the candidate has 2 years of experience and the job requires 5 years of experience then the candidate needs to gain 3 more years of experience to meet the job requirements.
+5. Write your Final Answer: the ranked list with percentages , plus 2-3
    sentences explaining the top match and what the main missing skill is.
 
 IMPORTANT: evaluate_job_match expects a single job as a JSON string,

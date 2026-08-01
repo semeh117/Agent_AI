@@ -50,9 +50,6 @@ def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = N
        print(f"  [ERROR] Job search failed: {jobs['error']}")
        return []
 
-    if not jobs:
-        print("  No jobs found for this query.")
-        return []
 
     print(f"  -> Found {len(jobs)} job postings\n")
 
