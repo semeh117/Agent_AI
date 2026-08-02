@@ -4,7 +4,7 @@ load_dotenv()
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from job_parser import extract_job_requirements
+from core.job_parser import extract_job_requirements
 
 title = "DATA SCIENTIST / MACHINE LEARNING ENGINEER "
 description = """

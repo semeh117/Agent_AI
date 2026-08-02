@@ -12,10 +12,10 @@ End-to-end automated pipeline:
 """
 
 import json
-from cv_parser import extract_text_from_pdf, extract_cv_info
-from job_search import search_real_jobs
-from job_parser import extract_job_requirements
-from matcher import calculate_compatibility
+from core.cv_parser import extract_text_from_pdf, extract_cv_info
+from search.job_search import search_real_jobs
+from core.job_parser import extract_job_requirements
+from core.matcher import calculate_compatibility
 
 
 def build_search_query(cv_info) -> str:

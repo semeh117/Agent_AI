@@ -7,13 +7,9 @@ per job it finds.
 
 import json
 from langchain_core.tools import tool
-from job_parser import extract_job_requirements
-from matcher import calculate_compatibility
+from core.job_parser import extract_job_requirements
+from core.matcher import calculate_compatibility
 
-# Module-level state: the agent needs th e candidate's profile, but tool
-# functions only take string/simple args (for LLM tool-calling to work
-# reliably) — so we set this once before running the agent, rather than
-# passing the whole CVInfo object through the LLM's tool-call arguments.
 _current_cv_info = None
 
 

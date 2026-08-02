@@ -9,7 +9,7 @@ LLM's own knowledge judges equivalence, no per-domain dictionary needed.
 """
 
 from typing import List, Dict, Optional
-from skill_matcher_llm import match_skills_llm
+from core.skill_matcher_llm import match_skills_llm
 
 EDUCATION_RANK = {
     "high school": 0,

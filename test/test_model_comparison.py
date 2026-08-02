@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from cv_parser import extract_text_from_pdf, extract_cv_info
+from core.cv_parser import extract_text_from_pdf, extract_cv_info
 
 load_dotenv()
 

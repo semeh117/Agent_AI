@@ -6,7 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-from cv_parser import extract_text_from_pdf, extract_cv_info
+from core.cv_parser import extract_text_from_pdf, extract_cv_info
 
 CV_FOLDER = "cv"  # update to your actual folder name
 

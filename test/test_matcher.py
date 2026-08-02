@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pathlib import Path
-from cv_parser import extract_text_from_pdf, extract_cv_info
-from job_parser import extract_job_requirements
-from matcher import calculate_compatibility
+from core.cv_parser import extract_text_from_pdf, extract_cv_info
+from core.job_parser import extract_job_requirements
+from core.matcher import calculate_compatibility
 
 # --- Pick a CV ---
 CV_FOLDER = "cv"

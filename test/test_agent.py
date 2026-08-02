@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pathlib import Path
-from cv_parser import extract_text_from_pdf, extract_cv_info
-from agent import run_agent_job_matching
+from core.cv_parser import extract_text_from_pdf, extract_cv_info
+from agent.agent import run_agent_job_matching
 
 CV_FOLDER = "cv"
 pdf_files = sorted(Path(CV_FOLDER).glob("*.pdf"))

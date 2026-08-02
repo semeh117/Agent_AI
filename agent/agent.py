@@ -15,23 +15,23 @@ from langchain.agents import AgentExecutor
 from langchain.agents import create_react_agent
 from langchain_core.prompts import PromptTemplate
 from config import get_llm
-from job_search import search_real_jobs
+from search.job_search import search_real_jobs
 
 
-from tools.job_evaluator import evaluate_job_match, set_candidate_profile
+from agent.tools.job_evaluator import evaluate_job_match, set_candidate_profile
 
 TOOLS = [search_real_jobs, evaluate_job_match]
 
 
 REACT_PROMPT_TEMPLATE = """You are an expert career assistant AI helping a candidate
 find and evaluate real job opportunities based on their profile.
-
+ 
 You have access to the following tools:
-
+ 
 {tools}
-
+ 
 Use the following format strictly:
-
+ 
 Question: the input question you must answer
 Thought: you should always think about what to do
 Action: the action to take, should be one of [{tool_names}]
@@ -41,27 +41,30 @@ Observation: the result of the action
 Thought: I now know the final answer
 Final Answer: ranked list of jobs from best to worst match with scores and
 a short explanation of the top match's strengths and main skill gap.
-
+ 
 STRICT WORKFLOW — follow this exactly:
 1. Call search_real_jobs with a relevant query based on the candidate's
    profile. It returns a JSON LIST of job objects.
 2. For EACH job object in the list, call evaluate_job_match with that
    SINGLE job object as a JSON string. Call it once per job — do not
    batch multiple jobs into one call.
-3. Collect all scores from evaluate_job_match results and rabk the jobs from best to worst match. :
-4. how much experience needs to be gained to meet the job requirements for example if the candidate has 2 years of experience and the job requires 5 years of experience then the candidate needs to gain 3 more years of experience to meet the job requirements.
-5. Write your Final Answer: the ranked list with percentages , plus 2-3
-   sentences explaining the top match and what the main missing skill is.
-
+3. Collect the score_percent from every evaluate_job_match result.
+4. Sort the jobs by score_percent in DESCENDING order (highest match
+   first, lowest match last) BEFORE writing your Final Answer. Double
+   check the numeric order is correct — do not rely on the order you
+   evaluated them in.
+5. Write your Final Answer: the SORTED ranked list with percentages,
+   plus 2-3 sentences explaining the top match's strengths and its main
+   missing skill.
+ 
 IMPORTANT: evaluate_job_match expects a single job as a JSON string,
 NOT the entire search results list. Extract one job at a time from the
 search results and pass it individually.
-
+ 
 Begin!
-
+ 
 Question: {input}
 Thought:{agent_scratchpad}"""
-
 
 def build_agent_executor(verbose: bool = True) -> AgentExecutor:
     llm = get_llm(temperature=0.0)

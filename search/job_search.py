@@ -61,8 +61,6 @@ def search_real_jobs(query: str, results_count: int = 5) -> str:
             "seniority": job.get("seniority", []),
             "description": _clean_description(job.get("description", "")),
             "categories": job.get("categories", []),
-            "requirements": job.get("requirements", []),
-            "skills": job.get("skills", []),
             "url": job.get("applicationLink", ""),
             "salary_min": job.get("minSalary"),
             "salary_max": job.get("maxSalary"),
