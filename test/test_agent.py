@@ -6,7 +6,7 @@ load_dotenv()
 
 from pathlib import Path
 from core.cv_parser import extract_text_from_pdf, extract_cv_info
-from agent.agent import run_agent_job_matching
+from agent.agent import run_agent_job_matching_full_auto
 
 CV_FOLDER = "cv"
 pdf_files = sorted(Path(CV_FOLDER).glob("*.pdf"))
@@ -21,7 +21,10 @@ raw_text = extract_text_from_pdf(str(selected_path))
 cv_info = extract_cv_info(raw_text)
 print(f"\nCandidate: {cv_info.full_name}, {len(cv_info.skills)} skills\n")
 
-result = run_agent_job_matching(cv_info, results_count=3)
+result = run_agent_job_matching_full_auto(cv_info, results_count=3)
 
 print("\n\n=== FINAL AGENT ANSWER ===")
+result = run_agent_job_matching_full_auto(cv_info, results_count=3)
 print(result["output"])
+
+

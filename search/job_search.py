@@ -25,7 +25,7 @@ def _clean_description(raw_html: str) -> str:
 
 
 @tool
-def search_real_jobs(query: str, results_count: int = 5) -> str:
+def search_real_jobs(query: str, results_count: int = 3) -> str:
     """
     Searches Himalayas for real, currently active remote job postings
     using their built-in keyword search (not client-side filtering).

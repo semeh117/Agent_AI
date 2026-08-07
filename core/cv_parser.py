@@ -98,6 +98,7 @@ through these naturally, they don't change the meaning.
 -Only extract skills that are explicitly written in the text. Do not infer related or implied skills that aren't literally mentioned
 CV TEXT:
 ---
+
 {cv_text}
 ---"""
     try:

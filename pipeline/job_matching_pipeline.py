@@ -16,6 +16,8 @@ from core.cv_parser import extract_text_from_pdf, extract_cv_info
 from search.job_search import search_real_jobs
 from core.job_parser import extract_job_requirements
 from core.matcher import calculate_compatibility
+from pipeline.cover_letter import generate_cover_letter
+from pipeline.send_results_email import create_results_draft
 
 
 def build_search_query(cv_info) -> str:
@@ -27,10 +29,19 @@ def build_search_query(cv_info) -> str:
     return f"{title} {top_skills}".strip()
 
 
-def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = None) -> list:
+def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = None) -> tuple:
     """
-    Runs the full pipeline and returns a list of jobs sorted by
-    compatibility score, highest first.
+    Runs the full pipeline and returns (cv_info, ranked_results):
+      - cv_info: the extracted CVInfo for this candidate
+      - ranked_results: list of jobs sorted by compatibility score,
+        highest first
+
+    Returning cv_info alongside the results (instead of just the list)
+    lets callers reuse the SAME extracted profile for follow-up steps
+    (e.g. cover_letter.py's generate_cover_letter()) without re-running
+    extract_cv_info() a second time — which would be a second, separate
+    LLM call and reintroduce the exact run-to-run extraction variance
+    this project's fixture-based testing was built to isolate.
     """
     print("Step 1: Extracting CV info...")
     raw_text = extract_text_from_pdf(cv_path)
@@ -45,11 +56,14 @@ def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = N
     jobs_json = search_real_jobs.invoke({"query": query, "results_count": results_count})
     jobs = json.loads(jobs_json)
 
-# Guard against the search tool returning an error object instead of a list
+    # Guard against the search tool returning an error object instead of a list
     if isinstance(jobs, dict) and "error" in jobs:
-       print(f"  [ERROR] Job search failed: {jobs['error']}")
-       return []
+        print(f"  [ERROR] Job search failed: {jobs['error']}")
+        return cv_info, []
 
+    if not jobs:
+        print("  No jobs found for this query.")
+        return cv_info, []
 
     print(f"  -> Found {len(jobs)} job postings\n")
 
@@ -63,6 +77,7 @@ def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = N
         results.append({
             "job_title": job["title"],
             "company": job["company"],
+            "description": job["description"],
             "url": job["url"],
             "score_percent": match["score_percent"],
             "skills_detail": match["skills"],
@@ -72,7 +87,7 @@ def run_job_matching(cv_path: str, results_count: int = 3, search_query: str = N
 
     # Step 6: rank by score, highest first
     results.sort(key=lambda r: r["score_percent"], reverse=True)
-    return results
+    return cv_info, results
 
 
 if __name__ == "__main__":
@@ -88,7 +103,7 @@ if __name__ == "__main__":
 
     manual_query = input("\nSearch query (leave blank to auto-generate from CV): ").strip()
 
-    ranked_jobs = run_job_matching(
+    cv_info, ranked_jobs = run_job_matching(
         str(selected_path),
         results_count=3,
         search_query=manual_query if manual_query else None,
@@ -103,3 +118,14 @@ if __name__ == "__main__":
         print(f"  Experience: {r['experience_detail']['score']*100:.0f}%")
         print(f"  Education:  {r['education_detail']['score']*100:.0f}%")
         print(f"  URL: {r['url']}")
+
+    if ranked_jobs:
+        print("\n" + "=" * 70)
+        print(f"GENERATING COVER LETTER FOR TOP MATCH: {ranked_jobs[0]['job_title']} @ {ranked_jobs[0]['company']}")
+        print("=" * 70)
+        letter = generate_cover_letter(cv_info, ranked_jobs[0])
+        print(f"\n{letter}")
+        create_results_draft(cv_info, ranked_jobs, letter, to_email="mechisemah07@gmail.com")
+    
+
+
