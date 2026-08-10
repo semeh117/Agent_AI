@@ -19,10 +19,7 @@ selected_path = pdf_files[int(choice) - 1]
 # Deterministic preprocessing — NOT part of the agent
 raw_text = extract_text_from_pdf(str(selected_path))
 cv_info = extract_cv_info(raw_text)
-print(f"\nCandidate: {cv_info.full_name}, {len(cv_info.skills)} skills\n")
-
-result = run_agent_job_matching_full_auto(cv_info, results_count=3)
-
+print(f"\nCandidate: {cv_info.full_name}, {len(cv_info.skills)} skills\n, mail: {cv_info.mail}\n\n")
 print("\n\n=== FINAL AGENT ANSWER ===")
 result = run_agent_job_matching_full_auto(cv_info, results_count=3)
 print(result["output"])

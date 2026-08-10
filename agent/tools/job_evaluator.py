@@ -11,11 +11,12 @@ from core.job_parser import extract_job_requirements
 from core.matcher import calculate_compatibility
 
 _current_cv_info = None
-
+_all_evaluations = []
 
 def set_candidate_profile(cv_info):
-    global _current_cv_info
+    global _current_cv_info , _all_evaluations
     _current_cv_info = cv_info
+    _all_evaluations = []  # reset for each new candidate
 
 @tool
 def evaluate_job_match(job_json: str) -> str:
@@ -47,13 +48,16 @@ def evaluate_job_match(job_json: str) -> str:
 
     job_req = extract_job_requirements(job_title, job_description)
     result = calculate_compatibility(_current_cv_info, job_req)
-
-    return json.dumps({
+    result_dict = {
         "job_title": job_title,
         "company": company,
+        "url": job.get("url", ""),  # picking up the earlier fix too
         "score_percent": result["score_percent"],
         "matching_skills": result["skills"]["matching"],
         "missing_skills": result["skills"]["missing"],
         "experience_match_score": f"{result['experience']['score']*100:.0f}%",
         "education_match_score": f"{result['education']['score']*100:.0f}%",
-    }, indent=2)
+    }
+    _all_evaluations.append(result_dict)
+    return json.dumps(result_dict, indent=2)
+   
