@@ -19,6 +19,7 @@ load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+MOONSHOTAI_API_KEY = os.getenv("MOONSHOTAI_API_KEY")
 
 # --- Models to compare: (provider, model_name) ---
 # Verify exact strings at https://openrouter.ai/models and
@@ -31,6 +32,9 @@ MODELS_TO_TEST = [
     ("groq", "llama-3.3-70b-versatile"),
     ("groq", "openai/gpt-oss-120b"),
     ("groq", "openai/gpt-oss-20b"),
+    ("groq", "openai/gpt-oss-7b"),
+    ("groq", "groq/kimi-7b-instruct"),
+    ("moonshot", "kimi-k2.6-turbo"),
 ]
 
 

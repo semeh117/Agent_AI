@@ -2,9 +2,9 @@
 shared foundation for both agents designs (agent1.py and agent2.py) 
 the search + evaluate ReAct loop that both paths run identically .Cover-letter and an email/draft delvery are where two paths diverge
 """
-from langchain.agents import  AgentExecutor , creaate_react_agent
-from langchain_core.tools import PromptTemplate
-from numpy.testing import verbose
+from langchain.agents import  AgentExecutor , create_react_agent
+from langchain_core.prompts import PromptTemplate
+
 from config import get_llm
 from search.job_search import search_real_jobs
 from agent.tools.job_evaluator import evaluate_job_match, set_candidate_profile
@@ -112,8 +112,8 @@ Question: {input}
 """
 def build_agent_executor(verbose: bool = True) -> AgentExecutor:
     llm = get_llm(temperature=0.0)
-    prompt = PromptTemplate.from_Template(REACT_PROMPT_TEMPLATE)
-    agent = creaate_react_agent(llm, TOOLS, prompt)
+    prompt = PromptTemplate.from_template(REACT_PROMPT_TEMPLATE)
+    agent = create_react_agent(llm, TOOLS, prompt)
     return AgentExecutor(
         agent=agent, 
         tools=TOOLS, 

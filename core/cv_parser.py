@@ -118,6 +118,7 @@ CV TEXT:
             seen.add(key)
             deduped.append(s.strip())
     result.skills = deduped
+    result.skills = verify_skills_grounded(result.skills, cv_text)
     return result
 
 
