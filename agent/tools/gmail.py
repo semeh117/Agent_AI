@@ -61,17 +61,14 @@ def send_results_draft(_unused_input: str = "") -> str:
     # create_results_draft() expects ranked_jobs as a LIST (it was built
     # for job_matching_pipeline.py's multi-job results) — wrap this single
     # job in a one-item list so the email body still renders correctly.
-    ranked_jobs = sorted(
-        job_evaluator._all_evaluations,
-        key=lambda r: r["score_percent"],
-        reverse=True,
-    )
+    ranked_jobs = job_evaluator.get_ranked_evaluations()
     ranked_jobs_for_email = [
         {
             "job_title": r["job_title"],
             "company": r["company"],
             "score_percent": r["score_percent"],
             "url": r.get("url", ""),
+            "inconclusive": r.get("inconclusive", False),
             "skills_detail": {
                 "matching": r["matching_skills"],
                 "missing": r["missing_skills"],

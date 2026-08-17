@@ -8,6 +8,7 @@ from langchain_core.prompts import PromptTemplate
 from config import get_llm
 from search.job_search import search_real_jobs
 from agent.tools.job_evaluator import evaluate_job_match, set_candidate_profile
+from agent.react_output_parser import TolerantReActSingleInputOutputParser
 
 TOOLS =[search_real_jobs, evaluate_job_match]
 REACT_PROMPT_TEMPLATE = """
@@ -113,13 +114,14 @@ Question: {input}
 def build_agent_executor(verbose: bool = True) -> AgentExecutor:
     llm = get_llm(temperature=0.0)
     prompt = PromptTemplate.from_template(REACT_PROMPT_TEMPLATE)
-    agent = create_react_agent(llm, TOOLS, prompt)
+    agent = create_react_agent(llm, TOOLS, prompt,
+                               output_parser=TolerantReActSingleInputOutputParser())
     return AgentExecutor(
         agent=agent, 
         tools=TOOLS, 
         verbose=verbose,
         handle_parsing_errors=True,  # if the LLM returns invalid JSON, don't crash; instead, return an error message
-        max_iterations=10,  # prevent infinite loops if the LLM gets stuck
+        max_iterations=15,  # prevent infinite loops if the LLM gets stuck
         return_intermediate_steps=True,  # for debugging and analysis; can be set to False in production
         )
     
