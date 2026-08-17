@@ -6,3 +6,4 @@ __pycache__/
 cv/
 credentials.json
 token.json
+cache/

@@ -36,8 +36,7 @@ from config import _build_llm
 # --- Define the two candidates for comparison here ---
 # Each entry: (label, provider, model_string, api_key_env_var)
 CANDIDATES = [
-    ("Kimi (Moonshot)", "moonshot", "kimi-k2.6-turbo", "MOONSHOT_API_KEY"),  # verify model string
-    ("Qwen (OpenRouter)", "openrouter", "qwen/qwen-2.5-7b-instruct", "OPENROUTER_API_KEY"),
+    ("Qwen 2.5 7B (local)", "ollama", "qwen2.5:7b-instruct"),
 ]
 
 

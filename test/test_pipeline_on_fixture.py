@@ -27,6 +27,8 @@ def run_once(cv_info, jobs):
     results = []
     for job in jobs:
         job_req = extract_job_requirements(job["title"], job["description"])
+        print(f" [debug] {job['title']}: {len(job_req.required_skills)} skills, "
+            f"exp={job_req.required_experience_years}, edu={job_req.required_education_level}")
         match = calculate_compatibility(cv_info, job_req)
         results.append({
             "job_title": job["title"],

@@ -25,16 +25,8 @@ MOONSHOTAI_API_KEY = os.getenv("MOONSHOTAI_API_KEY")
 # Verify exact strings at https://openrouter.ai/models and
 # https://console.groq.com/docs/models before running.
 MODELS_TO_TEST = [
-    ("openrouter", "qwen/qwen-2.5-7b-instruct"),
-    ("openrouter", "deepseek/deepseek-chat"),
-    ("openrouter", "mistralai/mistral-nemo"),
-    ("groq", "qwen/qwen3-32b"),
-    ("groq", "llama-3.3-70b-versatile"),
-    ("groq", "openai/gpt-oss-120b"),
-    ("groq", "openai/gpt-oss-20b"),
-    ("groq", "openai/gpt-oss-7b"),
-    ("groq", "groq/kimi-7b-instruct"),
-    ("moonshot", "kimi-k2.6-turbo"),
+       ("Qwen 2.5 7B (local)", "ollama", "qwen2.5:7b-instruct"),
+
 ]
 
 

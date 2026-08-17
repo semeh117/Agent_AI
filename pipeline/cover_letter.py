@@ -16,7 +16,7 @@ called once, after ranking is already finished, targeting only the #1
 job.
 """
 
-from config import get_generation_llm
+from config import get_llm
 
 
 COVER_LETTER_PROMPT = """Write a professional, concise cover letter for this candidate
@@ -70,7 +70,7 @@ def generate_cover_letter(cv_info, top_result: dict, llm=None) -> str:
         The cover letter as plain text.
     """
     if llm is None:
-        llm = get_generation_llm(temperature=0.3)
+        llm = get_llm(temperature=0.3)
 
     matching_skills = [m["job_skill"] for m in top_result["skills_detail"]["matching"]]
     missing_skills = top_result["skills_detail"]["missing"]
