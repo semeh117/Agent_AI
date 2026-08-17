@@ -21,8 +21,14 @@ credentials.json and token.json are both secrets — already covered by
 """
 
 import base64
+import io
 import os
+import re
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+from docx import Document
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -79,7 +85,10 @@ def _build_email_body(cv_info, ranked_jobs: list, cover_letter: str) -> str:
     ]
 
     for i, job in enumerate(ranked_jobs, start=1):
-        lines.append(f"{i}. {job['job_title']} @ {job['company']} — {job['score_percent']}% match")
+        line = f"{i}. {job['job_title']} @ {job['company']} — {job['score_percent']}% match"
+        if job.get("inconclusive"):
+            line += " (inconclusive — no extractable requirements, score is not a real skill match)"
+        lines.append(line)
         matching = [m["job_skill"] for m in job["skills_detail"]["matching"]]
         missing = job["skills_detail"]["missing"]
         if matching:
@@ -98,6 +107,39 @@ def _build_email_body(cv_info, ranked_jobs: list, cover_letter: str) -> str:
         lines.append(cover_letter)
 
     return "\n".join(lines)
+
+
+def _build_cover_letter_docx(cv_info, cover_letter: str, job_title: str, company: str) -> bytes:
+    """
+    Renders the cover letter as a Word (.docx) document, returned as bytes
+    in memory so it can be attached to the draft without touching disk.
+    """
+    doc = Document()
+
+    heading = doc.add_heading("Cover Letter", level=0)
+    heading.alignment = 1  # CENTER
+
+    if cv_info.full_name:
+        name_para = doc.add_paragraph(cv_info.full_name)
+        name_para.alignment = 1  # CENTER
+
+    doc.add_paragraph(f"Position: {job_title}")
+    doc.add_paragraph(f"Company: {company}")
+    doc.add_paragraph()
+
+    for para in cover_letter.split("\n"):
+        if para.strip():
+            doc.add_paragraph(para.strip())
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _safe_attachment_name(job_title: str, company: str) -> str:
+    """Windows/email-safe filename derived from the job title + company."""
+    base = re.sub(r'[\\/:*?"<>|]+', "_", f"Cover Letter - {job_title} @ {company}")
+    return base.strip()[:80] + ".docx"
 
 
 def create_results_draft(cv_info, ranked_jobs: list, cover_letter: str, to_email: str) -> dict:
@@ -123,9 +165,29 @@ def create_results_draft(cv_info, ranked_jobs: list, cover_letter: str, to_email
     subject = f"Your job matches — {ranked_jobs[0]['job_title']} and {len(ranked_jobs) - 1} more" \
         if ranked_jobs else "Your job matching results"
 
-    message = MIMEText(body_text)
+    message = MIMEMultipart("mixed")
     message["to"] = to_email
     message["subject"] = subject
+
+    # Plain-text body: ranked jobs + the cover letter text.
+    message.attach(MIMEText(body_text))
+
+    # Attach the cover letter as a Word document so the candidate can open,
+    # edit, and submit it directly.
+    if cover_letter:
+        top = ranked_jobs[0] if ranked_jobs else {"job_title": "Job", "company": ""}
+        docx_bytes = _build_cover_letter_docx(cv_info, cover_letter, top["job_title"], top["company"])
+        attachment = MIMEApplication(
+            docx_bytes,
+            _subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        attachment.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=_safe_attachment_name(top["job_title"], top["company"]),
+        )
+        message.attach(attachment)
+
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
     draft = service.users().drafts().create(
