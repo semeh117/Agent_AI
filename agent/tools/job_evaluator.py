@@ -35,6 +35,31 @@ def set_candidate_profile(cv_info):
     set_candidate_email(cv_info.mail if cv_info else None)
 
 
+def get_ranked_evaluations() -> list:
+    """
+    Deterministic final ranking for the current run, safe to use from
+    anywhere (email builder, agent completion, agent1):
+
+      - de-duplicates: the LLM sometimes calls evaluate_job_match twice for
+        the same posting (a re-typed job with the same URL), which would
+        otherwise double-count it in the ranked list. Keyed by URL when
+        present, else by title|company.
+      - orders by the prompt's rule: any evaluation with extractable
+        requirements (inconclusive: false) ranks ABOVE all inconclusive
+        ones, regardless of raw score_percent — an inconclusive 75% is not
+        a real match, a conclusive 55% is. Within each group, score
+        descending.
+    """
+    unique = {}
+    for result in _all_evaluations:
+        key = result.get("url") or f"{result['job_title']}|{result['company']}"
+        unique[key] = result  # a later evaluation of the same job wins
+
+    ranked = list(unique.values())
+    ranked.sort(key=lambda r: (r.get("inconclusive", True), -r["score_percent"]))
+    return ranked
+
+
 @tool
 def evaluate_job_match(job_json: str) -> str:
     """
@@ -80,8 +105,13 @@ def evaluate_job_match(job_json: str) -> str:
 
     matching_skill_names = [m["job_skill"] for m in result["skills"]["matching"]]
     missing_skill_names = result["skills"]["missing"]
+    inconclusive = not matching_skill_names and not missing_skill_names
 
-    if _current_cv_info.mail and job_url:
+    if _current_cv_info.mail:
+        # Record EVERY scored job — even when no URL is available (the agent
+        # often retypes postings and drops the url). record_seen keys by
+        # `missing|title|company` in that case, and search_real_jobs filters
+        # on both forms, so a URL-less evaluation is still remembered.
         record_seen(
             candidate_email=_current_cv_info.mail,
             job_url=job_url,
@@ -99,6 +129,7 @@ def evaluate_job_match(job_json: str) -> str:
         "score_percent": result["score_percent"],
         "matching_skills": result["skills"]["matching"],
         "missing_skills": result["skills"]["missing"],
+        "inconclusive":inconclusive,
         "experience_match_score": f"{result['experience']['score']*100:.0f}%",
         "education_match_score": f"{result['education']['score']*100:.0f}%",
     }

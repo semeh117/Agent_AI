@@ -59,10 +59,26 @@ def get_seen_urls(candidate_email: str) -> Set[str]:
         conn.close()
 
 
+def _job_key(job_title: str, company: str) -> str:
+    """Stable key for a posting that has no URL — small LLMs often drop the
+    'url' field when they retype a job for evaluation. Without this, a scored
+    job with no recorded URL would never be remembered and would be scored
+    AGAIN on the next run."""
+    return f"missing|{job_title.strip()}|{company.strip()}"
+
+
 def record_seen(candidate_email: str, job_url: str, job_title: str, company: str,
                  score_percent: float, matching_skills: list, missing_skills: list) -> None:
-    if not candidate_email or not job_url:
+    """Mark a job as scored/seen for this candidate. Keyed by URL when we have
+    one, else by `missing|title|company` so no scored job is ever silently
+    dropped — see search.job_search.search_real_jobs, which filters on BOTH
+    forms so a job remembered this way is still skipped on the next search."""
+    if not candidate_email or not job_title:
         return  # nothing to key this record by — skip silently rather than error
+    if not job_url:
+        job_url = _job_key(job_title, company)
+    if not job_url:
+        return
     import json
     conn = _get_connection()
     try:

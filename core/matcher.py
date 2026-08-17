@@ -21,10 +21,9 @@ EDUCATION_RANK = {
 
 def _skills_match(cv_skills: List[str], job_skills: List[str]) -> Dict:
     if not job_skills:
-        return {"score": 1.0, "matching": [], "missing": [],
-                "note": "Job posting listed no explicit required skills."}
-    if not cv_skills:
-        return {"score": 0.0, "matching": [], "missing": job_skills}
+        return {"score": 0.5, "matching": [], "missing": [],
+                "note": "Job posting listed no explicit required skills — "
+                        "inconclusive, not a verified match."}
 
     cv_skills_lower = [s.lower() for s in cv_skills]
 
