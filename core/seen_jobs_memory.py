@@ -96,4 +96,26 @@ def record_seen(candidate_email: str, job_url: str, job_title: str, company: str
         )
         conn.commit()
     finally:
-        conn.close() 
+        conn.close()
+
+
+def clear_seen(candidate_email: str = None) -> int:
+    """
+    Deletes seen-job records. Pass a candidate_email to wipe just that
+    candidate's history, or omit to wipe EVERYONE's — useful for starting
+    a clean dev/test slate rather than manually deleting the DB file.
+    Returns the number of rows deleted.
+    """
+    conn = _get_connection()
+    try:
+        if candidate_email:
+            cursor = conn.execute(
+                "DELETE FROM seen_jobs WHERE candidate_email = ?",
+                (candidate_email.strip().lower(),),
+            )
+        else:
+            cursor = conn.execute("DELETE FROM seen_jobs")
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()

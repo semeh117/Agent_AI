@@ -27,7 +27,7 @@ def get_llm(temperature: float = 0.0):
             temperature=temperature,
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
-            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "8192")),
+            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "2048")),
             max_retries=3,
         )
 

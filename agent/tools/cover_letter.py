@@ -29,9 +29,62 @@ import agent.tools.job_evaluator as job_evaluator  # import the MODULE, not the
 # at RUNTIME (after set_candidate_profile() runs), and importing the bare
 # name would freeze a stale None copied at import time instead of staying
 # linked to the module's actual current value.
+from search import job_search
 
 _last_cover_letter = None
 _last_cover_letter_job = None
+
+
+def _lookup_evaluation(job: dict):
+    """
+    The model sometimes passes only a url (or a title+company pair) to
+    write_cover_letter — the same drift it shows with evaluate_job_match.
+    Recover the FULL evaluation recorded earlier this run (job_title,
+    company, score_percent, matching/missing skills, ...) so the letter can
+    be built without the model re-serializing it. Resolves by url, then by
+    title+company, then by a UNIQUE title when no company was given.
+    """
+    job_url = job.get("url", "")
+    job_title = job.get("title", "") or job.get("job_title", "")
+    company = job.get("company", "")
+
+    if job_url:
+        for ev in job_evaluator._all_evaluations:
+            if ev.get("url") == job_url:
+                return ev
+
+    if job_title:
+        candidates = [
+            ev for ev in job_evaluator._all_evaluations
+            if ev.get("job_title") == job_title
+        ]
+        if company:
+            candidates = [ev for ev in candidates if ev.get("company") == company]
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return None
+
+
+def _fill_stored_description(job: dict) -> dict:
+    """Attach the FULL stored posting description to an evaluation-shaped job
+    so the letter can be grounded in the actual role. Evaluation results
+    carry no description; the stored search results do."""
+    if job.get("description"):
+        return job
+    job_url = job.get("url", "")
+    job_title = job.get("job_title", "")
+    company = job.get("company", "")
+    for stored in job_search._last_search_results:
+        if (job_url and stored.get("url") == job_url) or (
+            not job_url and not company and stored.get("title") == job_title
+        ):
+            return {**job, "description": stored.get("description", "")}
+        if not job_url and company and (
+            stored.get("title") == job_title and stored.get("company") == company
+        ):
+            return {**job, "description": stored.get("description", "")}
+    return job
 
 
 def _normalize_matching_skills(matching_skills) -> list:
@@ -68,7 +121,9 @@ def write_cover_letter(evaluated_job_json: str) -> str:
     job_title, company, score_percent, matching_skills, missing_skills.
     You can also include "description" if you have it (from the original
     search_real_jobs result) for a more grounded letter — if omitted,
-    the letter will note less detail about the role itself.
+    the letter will note less detail about the role itself. Passing just
+    the job's "url" also works: the full evaluation recorded earlier this
+    run is looked up automatically.
 
     Output: a short confirmation that the letter was written (NOT the
     full letter text — you do not need to copy or repeat it anywhere).
@@ -87,8 +142,17 @@ def write_cover_letter(evaluated_job_json: str) -> str:
 
     required = ["job_title", "company", "score_percent", "matching_skills", "missing_skills"]
     missing_fields = [f for f in required if f not in job]
+
     if missing_fields:
-        return f"Error: Missing required fields: {', '.join(missing_fields)}"
+        # The model sometimes hands over just a url (or a title+company
+        # pair) — recover the evaluated job from this run's records rather
+        # than rejecting the call and letting the agent loop on it.
+        resolved = _lookup_evaluation(job)
+        if resolved is not None:
+            job = _fill_stored_description(resolved)
+            missing_fields = [f for f in required if f not in job]
+        if missing_fields:
+            return f"Error: Missing required fields: {', '.join(missing_fields)}"
 
     # Adapt to the shape generate_cover_letter() expects (same as
     # job_matching_pipeline.py's results[0] shape). matching_skills

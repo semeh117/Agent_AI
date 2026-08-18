@@ -6,11 +6,11 @@ from langchain.agents import  AgentExecutor , create_react_agent
 from langchain_core.prompts import PromptTemplate
 
 from config import get_llm
-from search.job_search import search_real_jobs
+from agent.tools.job_search_tool import search_jobs_for_agent
 from agent.tools.job_evaluator import evaluate_job_match, set_candidate_profile
 from agent.react_output_parser import TolerantReActSingleInputOutputParser
 
-TOOLS =[search_real_jobs, evaluate_job_match]
+TOOLS =[search_jobs_for_agent, evaluate_job_match]
 REACT_PROMPT_TEMPLATE = """
 You are an expert career-matching assistant. Your task is to find real job opportunities and evaluate how well each opportunity matches the candidate's profile.
 
@@ -31,15 +31,17 @@ Follow this workflow exactly:
 
 ### Step 1 — Search for jobs
 
-Call `search_real_jobs` exactly as needed to obtain relevant real job opportunities.
+Call `search_jobs_for_agent` exactly as needed to obtain relevant real job opportunities.
 
 Build the search query from the candidate's profile and request. Prioritize relevant job titles, required skills, experience level, location/work arrangement, industry, and other explicitly stated constraints.
 
-The tool returns a JSON list of job objects.
+The tool returns a short status note, followed by a JSON list of job objects.
+
+If the status note says jobs were filtered out because you already evaluated them in a previous run, or that fewer postings came back than requested, do not just proceed with a short list. Refine the query — try different skill keywords, a different job title, or a broader/narrower phrasing — and call `search_jobs_for_agent` again before moving on to evaluation. Do this at most twice per search need; if you still come up short after that, proceed with whatever fresh postings you do have rather than looping indefinitely.
 
 ### Step 2 — Evaluate every job individually
 
-For every job object returned by `search_real_jobs`:
+For every job object returned by `search_jobs_for_agent`:
 
 1. Extract exactly one job object.
 2. Serialize that single job object as a valid JSON string.

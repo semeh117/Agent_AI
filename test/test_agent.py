@@ -23,7 +23,7 @@ raw_text = extract_text_from_pdf(str(selected_path))
 cv_info = extract_cv_info(raw_text)
 print(f"\nCandidate: {cv_info.full_name}, {len(cv_info.skills)} skills\n, mail: {cv_info.mail}\n\n")
 print("\n\n=== FINAL AGENT ANSWER ===")
-result = run_agent2_full_auto(cv_info, results_count=3)
+result = run_agent2_full_auto(cv_info)
 print(result["output"])
 
 

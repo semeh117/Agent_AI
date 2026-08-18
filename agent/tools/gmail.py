@@ -59,23 +59,10 @@ def send_results_draft(_unused_input: str = "") -> str:
                 "recipient address.")
 
     # create_results_draft() expects ranked_jobs as a LIST (it was built
-    # for job_matching_pipeline.py's multi-job results) — wrap this single
-    # job in a one-item list so the email body still renders correctly.
-    ranked_jobs = job_evaluator.get_ranked_evaluations()
-    ranked_jobs_for_email = [
-        {
-            "job_title": r["job_title"],
-            "company": r["company"],
-            "score_percent": r["score_percent"],
-            "url": r.get("url", ""),
-            "inconclusive": r.get("inconclusive", False),
-            "skills_detail": {
-                "matching": r["matching_skills"],
-                "missing": r["missing_skills"],
-            },
-        }
-        for r in ranked_jobs
-    ]
+    # for job_matching_pipeline.py's multi-job results) — get_ranked_jobs_payload()
+    # wraps this run's evaluations into that shape, shared with the
+    # Telegram tool so both channels render identical content.
+    ranked_jobs_for_email = job_evaluator.get_ranked_jobs_payload()
 
     try:
         draft = create_results_draft(

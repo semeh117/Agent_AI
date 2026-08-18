@@ -96,8 +96,32 @@ def test_writes_letter_for_true_top_match():
 def test_creates_draft_when_agent_claimed_it():
     out, _, drafted = make_agent_did_nothing()
     assert len(drafted) == 1
-    assert "creating it now" in out["output"]
+    assert "gmail" in out["output"]
     assert "fake draft created" in out["output"]
+
+
+def test_delivers_via_telegram_when_user_chose_telegram():
+    """When the user answered ask_user_delivery_channel with telegram and
+    the agent delivered on the WRONG channel (gmail), the completion must
+    re-deliver via telegram."""
+    reset_state()
+    cover_letter_tool._last_cover_letter = "existing letter"
+    cover_letter_tool._last_cover_letter_job = {
+        "job_title": "AI Engineer - Equity", "company": "Startup"}
+    import agent.tools.delivery_choice as delivery_choice
+    delivery_choice._last_delivery_channel = "telegram"
+    drafted = []
+    full_auto.send_results_draft = FakeTool(lambda _: drafted.append(1))
+    telegram_calls = []
+    full_auto.send_results_telegram = FakeTool(lambda _: telegram_calls.append(1) or "fake telegram sent")
+    action = type("A", (), {"tool": "send_results_draft"})()
+    result = {
+        "output": "Final Answer: delivered.",
+        "intermediate_steps": [(action, "Draft created (id: 123)")],
+    }
+    out = full_auto._complete_deterministically(result)
+    assert len(telegram_calls) == 1, "must deliver via telegram since user chose it"
+    assert "fake telegram sent" in out["output"]
 
 
 def test_no_duplicate_when_agent_did_everything_right():

@@ -6,6 +6,26 @@ Himalayas returns FULL job descriptions (not truncated snippets), which
 is essential for reliable skill extraction, and uses proper server-side
 keyword search — unlike RemoteOK, which was dropped after an AND/OR
 matching bug, and Adzuna, which was dropped for truncated descriptions.
+
+_search_jobs_core() holds all the actual paging/fallback/seen-filtering
+logic and returns a plain dict (jobs + metadata), NOT a JSON string.
+Two things sit on top of it:
+
+  - search_real_jobs (this file): the machine-facing @tool used by the
+    deterministic pipeline and capture_job_fixture.py. Output MUST stay
+    a strict JSON string of a list — job_matching_pipeline.py does
+    json.loads() on it directly, with no tolerance for extra text.
+
+  - search_jobs_for_agent (agent/tools/job_search_tool.py): the
+    agent-facing @tool. Wraps the same core call but prepends a
+    natural-language note about how many already-seen jobs were
+    filtered out, so the agent's Thought step can actually reason about
+    it (e.g. decide to refine its query) instead of silently receiving
+    a shorter list with no explanation.
+
+Keeping the core logic in one place means both tools stay in sync on
+paging/fallback/filtering behavior — only the OUTPUT SHAPE differs
+between them.
 """
 
 import html
@@ -87,20 +107,24 @@ def _fetch_page(query: str, limit: int, page: int) -> list:
     return jobs
 
 
-
-@tool
-def search_real_jobs(query: str, results_count: int = 3) -> str:
+def _search_jobs_core(query: str, results_count: int) -> dict:
     """
-    Searches Himalayas for real, currently active remote job postings
-    using their built-in keyword search (not client-side filtering).
+    Does the actual paging / seen-filtering / category-fallback work.
+    Shared by both search_real_jobs and search_jobs_for_agent so their
+    filtering behavior can never drift apart — only how each tool
+    SHAPES the return value differs.
 
-    Input:
-        query: search terms, e.g. "full stack developer"
-        results_count: how many postings to return (default 5, max 20)
-
-    Output: JSON string — list of job postings, each with:
-        title, company, employment_type, seniority, full cleaned
-        description, categories, url, salary (if available).
+    Returns:
+        {
+            "jobs": [...],                 # up to results_count fresh postings
+            "query": str,                  # the (possibly cleaned) query used
+            "requested_count": int,
+            "returned_count": int,
+            "filtered_seen_count": int,    # how many candidate postings were
+                                            # skipped this call because this
+                                            # candidate already saw them
+                                            # (across ALL pages/fallbacks tried)
+        }
     """
     query = query.strip()
     if query.startswith("{") and query.endswith("}"):
@@ -122,6 +146,7 @@ def search_real_jobs(query: str, results_count: int = 3) -> str:
 
     fresh_jobs = []
     all_seen_this_search = []
+    filtered_seen_count = 0
 
     MAX_PAGE_ATTEMPTS = 3
 
@@ -138,12 +163,21 @@ def search_real_jobs(query: str, results_count: int = 3) -> str:
             if not _is_seen(job, seen_urls):
                 if job["url"] not in {j["url"] for j in fresh_jobs}:  # de-dupe within this search too
                     fresh_jobs.append(job)
+            else:
+                filtered_seen_count += 1
 
         if len(fresh_jobs) >= results_count:
             _record_returned(fresh_jobs[:results_count])
             print(f"Loaded {len(fresh_jobs)} fresh jobs for '{query}' "
-                  f"(page {page}, {len(seen_urls)} previously seen filtered out)")
-            return json.dumps(fresh_jobs[:results_count], indent=2, ensure_ascii=False)
+                  f"(page {page}, returning {results_count}, "
+                  f"{filtered_seen_count} previously seen filtered out)")
+            return {
+                "jobs": fresh_jobs[:results_count],
+                "query": query,
+                "requested_count": results_count,
+                "returned_count": len(fresh_jobs[:results_count]),
+                "filtered_seen_count": filtered_seen_count,
+            }
 
         print(f"  Page {page}: only {len(fresh_jobs)} fresh job(s) so far "
               f"(candidate has already seen {len(seen_urls)} jobs total) — trying next page...")
@@ -165,8 +199,10 @@ def search_real_jobs(query: str, results_count: int = 3) -> str:
 
                     fallback_jobs = _fetch_page(fallback_query, limit=max(results_count * 2, 10), page=1)
                     for job2 in fallback_jobs:
-                        if (not _is_seen(job2, seen_urls)
-                                and job2["url"] not in {j["url"] for j in fresh_jobs}):
+                        if _is_seen(job2, seen_urls):
+                            filtered_seen_count += 1
+                            continue
+                        if job2["url"] not in {j["url"] for j in fresh_jobs}:
                             fresh_jobs.append(job2)
 
                     if len(fresh_jobs) >= results_count:
@@ -181,4 +217,28 @@ def search_real_jobs(query: str, results_count: int = 3) -> str:
     print(f"Loaded {len(fresh_jobs)} fresh job(s) total for '{query}' "
           f"({len(seen_urls)} previously seen filtered out)")
     _record_returned(fresh_jobs[:results_count])
-    return json.dumps(fresh_jobs[:results_count], indent=2, ensure_ascii=False)
+    return {
+        "jobs": fresh_jobs[:results_count],
+        "query": query,
+        "requested_count": results_count,
+        "returned_count": len(fresh_jobs[:results_count]),
+        "filtered_seen_count": filtered_seen_count,
+    }
+
+
+@tool
+def search_real_jobs(query: str, results_count: int = 3) -> str:
+    """
+    Searches Himalayas for real, currently active remote job postings
+    using their built-in keyword search (not client-side filtering).
+
+    Input:
+        query: search terms, e.g. "full stack developer"
+        results_count: how many postings to return (default 5, max 20)
+
+    Output: JSON string — list of job postings, each with:
+        title, company, employment_type, seniority, full cleaned
+        description, categories, url, salary (if available).
+    """
+    result = _search_jobs_core(query, results_count)
+    return json.dumps(result["jobs"], indent=2, ensure_ascii=False)
