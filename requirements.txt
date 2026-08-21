@@ -8,6 +8,7 @@ langgraph
 langchain-ollama
 langchain-openai
 langchain-huggingface
+langchain-google-genai
 
 numpy
 sentence-transformers

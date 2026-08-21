@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
@@ -27,18 +27,28 @@ def get_llm(temperature: float = 0.0):
             temperature=temperature,
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
-            max_tokens=int(os.getenv("OPENROUTER_MAX_TOKENS", "2048")),
+
             max_retries=3,
+        )
+    elif LLM_PROVIDER == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            return ChatGoogleGenerativeAI(
+                    model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+                    temperature=temperature,
+                    google_api_key=os.getenv("GEMINI_API_KEY"),
         )
 
     elif LLM_PROVIDER == "groq":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            model=os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
             temperature=temperature,
             api_key=os.getenv("GROQ_API_KEY"),
             base_url="https://api.groq.com/openai/v1",
-            max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "8192")),
+            # Groq applies its TPM limit to input tokens plus the requested
+            # completion budget. A 12k default therefore rejects even small
+            # prompts on the 8k on-demand tier before generation starts.
+            max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "2048")),
             max_retries=3,
         )
     elif LLM_PROVIDER == "ollama":
