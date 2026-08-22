@@ -11,10 +11,8 @@ _search_jobs_core() holds all the actual paging/fallback/seen-filtering
 logic and returns a plain dict (jobs + metadata), NOT a JSON string.
 Two things sit on top of it:
 
-  - search_real_jobs (this file): the machine-facing @tool used by the
-    deterministic pipeline and capture_job_fixture.py. Output MUST stay
-    a strict JSON string of a list — job_matching_pipeline.py does
-    json.loads() on it directly, with no tolerance for extra text.
+  - search_real_jobs (this file): the machine-facing @tool for direct
+    Himalayas searches. Its output stays a strict JSON list string.
 
   - search_jobs_for_agent (agent/tools/job_search_tool.py): the
     agent-facing @tool. Wraps the same core call but prepends a

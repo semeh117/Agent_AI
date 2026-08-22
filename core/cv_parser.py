@@ -10,7 +10,7 @@ Stage 2: extract_cv_info() — LLM-powered, forced structured output.
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
-from config import get_llm
+from config import get_parser_llm
 from core.extraction_cache import get_cached, set_cached
 
 # Default cache behavior. Can be overridden by the application/config layer.
@@ -67,7 +67,7 @@ def extract_cv_info(cv_text: str, llm=None ,use_cache :bool= True) -> CVInfo:
                   f"({len(cached.skills)} skills, no wait).")
             return cached
     if llm is None:
-        llm = get_llm(temperature=0.0)
+        llm = get_parser_llm(temperature=0.0)
     structured_llm = llm.with_structured_output(CVInfo)
 
     prompt = f"""You are an expert CV/resume parser. Extract structured information

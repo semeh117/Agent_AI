@@ -1,47 +1,65 @@
-"""
-Centralized configuration. Swap LLM provider via .env without touching
-any other file — all other modules call get_llm() / get_embeddings().
+"""Centralized model configuration.
+
+``get_llm`` remains the backwards-compatible factory used by Agent 1.
+Agent 2 uses the three role-specific factories so extraction, orchestration,
+and cover-letter writing can be benchmarked independently.
 """
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
-def get_llm(temperature: float = 0.0):
-    if LLM_PROVIDER == "openai":
+def _build_llm(
+    provider: str,
+    model: str,
+    temperature: float,
+    role: str | None = None,
+):
+    """Build one chat model without coupling it to a workflow role."""
+
+    provider = provider.lower()
+    role_prefix = f"{role.upper()}_" if role else ""
+
+    if provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            model=model,
             temperature=temperature,
             api_key=os.getenv("OPENAI_API_KEY"),
         )
 
-    elif LLM_PROVIDER == "openrouter":
+    if provider == "openrouter":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-7b-instruct"),
+            model=model,
             temperature=temperature,
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
-
+            max_tokens=int(
+                os.getenv(
+                    f"{role_prefix}MAX_TOKENS",
+                    os.getenv("OPENROUTER_MAX_TOKENS", "2048"),
+                )
+            ),
             max_retries=3,
         )
-    elif LLM_PROVIDER == "gemini":
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            return ChatGoogleGenerativeAI(
-                    model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
-                    temperature=temperature,
-                    google_api_key=os.getenv("GEMINI_API_KEY"),
+
+    if provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(
+            model=model,
+            temperature=temperature,
+            google_api_key=os.getenv("GEMINI_API_KEY"),
         )
 
-    elif LLM_PROVIDER == "groq":
+    if provider == "groq":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-            model=os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
+            model=model,
             temperature=temperature,
             api_key=os.getenv("GROQ_API_KEY"),
             base_url="https://api.groq.com/openai/v1",
@@ -51,14 +69,65 @@ def get_llm(temperature: float = 0.0):
             max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "2048")),
             max_retries=3,
         )
-    elif LLM_PROVIDER == "ollama":
-       from langchain_ollama import ChatOllama
-       return ChatOllama(
-            model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M"),
+
+    if provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model=model,
             temperature=temperature,
+        )
+
+    raise ValueError(f"Unknown LLM provider: {provider}")
+
+
+def _model_for_provider(provider: str) -> str:
+    defaults = {
+        "openai": "gpt-4o-mini",
+        "openrouter": "qwen/qwen-2.5-7b-instruct",
+        "gemini": "gemini-2.5-flash-lite",
+        "groq": "qwen/qwen3.6-27b",
+        "ollama": "qwen2.5:7b-instruct-q4_K_M",
+    }
+    if provider not in defaults:
+        raise ValueError(f"Unknown LLM provider: {provider}")
+    return os.getenv(f"{provider.upper()}_MODEL", defaults[provider])
+
+
+def get_llm(temperature: float = 0.0):
+    """Backwards-compatible Agent 1/global model factory."""
+
+    return _build_llm(
+        provider=LLM_PROVIDER,
+        model=_model_for_provider(LLM_PROVIDER),
+        temperature=temperature,
     )
-    else:
-        raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}")
+
+
+def get_parser_llm(temperature: float = 0.0):
+    """Model used to extract structured information from CVs and jobs."""
+
+    provider = os.getenv("PARSER_PROVIDER", "openrouter").lower()
+    model = os.getenv("PARSER_MODEL", "qwen/qwen-2.5-7b-instruct")
+    return _build_llm(provider, model, temperature, role="parser")
+
+
+def get_agent_llm(temperature: float = 0.0):
+    """Model used by Agent 2 for query planning and tool orchestration."""
+
+    provider = os.getenv("AGENT_PROVIDER", "groq").lower()
+    model = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
+    return _build_llm(provider, model, temperature, role="agent")
+
+
+def get_cover_letter_llm(temperature: float = 0.3):
+    """Model used only for the final cover-letter generation call."""
+
+    provider = os.getenv("COVER_LETTER_PROVIDER", "gemini").lower()
+    model = os.getenv(
+        "COVER_LETTER_MODEL",
+        "gemini-2.5-flash-lite",
+    )
+    return _build_llm(provider, model, temperature, role="cover_letter")
 
 
 def get_embeddings():

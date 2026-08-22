@@ -8,18 +8,14 @@ jobs were filtered out because this candidate already evaluated them in
 a previous run.
 
 Why a separate tool instead of changing search_real_jobs itself:
-search_real_jobs's output is consumed by json.loads() directly in
-job_matching_pipeline.py and dev/capture_job_fixture.py — it must stay
-a strict JSON string of a list, no extra text. The agent, by contrast,
-just reads the Observation as a string, so it's free to include prose
+search_real_jobs keeps a strict JSON-list output contract. The agent, by
+contrast, reads the Observation as a string, so it's free to include prose
 framing the model can actually reason from in its next Thought (e.g.
 "3 jobs were already seen — I should refine my query" instead of
 silently getting a shorter list with no explanation).
 
-Same module pattern as search/job_search_fixture.py and dev/cv_fixture.py
-in this project: a separate, purpose-built function sitting alongside
-the "real" one rather than overloading a single function with two
-different output contracts.
+This remains a separate, purpose-built wrapper rather than overloading
+one function with two different output contracts.
 """
 
 import json

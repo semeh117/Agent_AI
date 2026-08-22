@@ -4,11 +4,14 @@ python-dotenv
 requests==2.32.3
 
 langchain==0.3.7
-langgraph
-langchain-ollama
-langchain-openai
-langchain-huggingface
-langchain-google-genai
+langchain-core==0.3.63
+langchain-text-splitters==0.3.8
+langsmith==0.1.147
+langgraph==0.2.76
+langchain-ollama==0.2.3
+langchain-openai==0.2.14
+langchain-huggingface==0.1.2
+langchain-google-genai==2.1.5
 
 numpy
 sentence-transformers
@@ -20,3 +23,5 @@ google-auth-httplib2
 google-api-python-client
 
 python-docx
+selenium
+undetected-chromedriver

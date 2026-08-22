@@ -18,8 +18,9 @@ This module does NOT:
     - generate cover letters
     - save CSV files
 
-The agent-facing wrapper should live in:
-    agent/tools/linkedin_search_tool.py
+The production wrapper and ranking orchestration live in:
+    agent/tools/linkedin_match_tool.py
+    pipeline/linkedin_cosine_pipeline.py
 
 Public function:
     search_jobs(query, location="", max_jobs=20)
@@ -27,6 +28,7 @@ Public function:
 
 import time
 import re
+import json
 import logging
 from typing import Optional
 from urllib.parse import quote_plus
@@ -470,6 +472,111 @@ def _scrape_description(driver) -> str:
     return _clean_text(best)
 
 
+def _walk_json(value):
+    """Yield every dictionary contained in a JSON-compatible value."""
+
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _scrape_structured_job_data(driver) -> dict:
+    """Read title/company from LinkedIn's schema.org JobPosting JSON-LD.
+
+    Public job pages commonly expose structured metadata for search engines.
+    It is less sensitive to visible-page localization and CSS changes than
+    scraping a generic heading such as ``h1``. All failures are best-effort:
+    callers still have selector and browser-tab fallbacks.
+    """
+
+    try:
+        scripts = driver.find_elements(
+            By.CSS_SELECTOR,
+            'script[type="application/ld+json"]',
+        )
+    except Exception:
+        return {}
+
+    for script in scripts:
+        try:
+            raw = script.get_attribute("textContent") or script.get_attribute(
+                "innerHTML"
+            )
+            data = json.loads(raw or "")
+        except Exception:
+            continue
+
+        for item in _walk_json(data):
+            item_type = item.get("@type")
+            types = item_type if isinstance(item_type, list) else [item_type]
+            if "JobPosting" not in types:
+                continue
+
+            organization = item.get("hiringOrganization") or {}
+            if isinstance(organization, list):
+                organization = next(
+                    (entry for entry in organization if isinstance(entry, dict)),
+                    {},
+                )
+
+            return {
+                "title": str(item.get("title") or "").strip(),
+                "company": str(
+                    (organization.get("name") or "")
+                    if isinstance(organization, dict)
+                    else ""
+                ).strip(),
+            }
+
+    return {}
+
+
+def _strip_parenthesized_location(text: str) -> str:
+    """Remove a final ``(City, Region, Country)`` without removing ``(f/m/d)``."""
+
+    before, separator, suffix = text.rpartition(" (")
+    if separator and suffix.endswith(")") and "," in suffix:
+        return before.strip()
+    return text.strip()
+
+
+def _parse_browser_tab_title(tab_title: str) -> tuple[str, str]:
+    """Parse role/company from common localized LinkedIn tab-title forms."""
+
+    text = (tab_title or "").split(" | LinkedIn")[0].strip()
+    if not text:
+        return "", ""
+
+    # French example observed on de.linkedin.com with a French browser UI:
+    # "adjoe recrute pour des postes de Senior ML Engineer (Hambourg, ...)"
+    french_marker = " recrute pour des postes de "
+    if french_marker in text:
+        company, title = text.split(french_marker, 1)
+        return _strip_parenthesized_location(title), company.strip()
+
+    # Public English pages commonly use "Company hiring Role in Location".
+    if " hiring " in text:
+        company, title_and_location = text.split(" hiring ", 1)
+        title, separator, _location = title_and_location.rpartition(" in ")
+        return (title if separator else title_and_location).strip(), company.strip()
+
+    # German public-page fallback: "Company sucht Role in Location".
+    if " sucht " in text:
+        company, title_and_location = text.split(" sucht ", 1)
+        title, separator, _location = title_and_location.rpartition(" in ")
+        return (title if separator else title_and_location).strip(), company.strip()
+
+    if " at " in text:
+        role, _, company = text.rpartition(" at ")
+        return role.strip(), company.strip()
+
+    return text, ""
+
+
 def _browser_tab_parts(driver) -> tuple:
     """
     Fallback source for title/company: LinkedIn's browser tab title is
@@ -483,13 +590,7 @@ def _browser_tab_parts(driver) -> tuple:
     except Exception:
         tab_title = ""
 
-    tab_title = tab_title.split(" | LinkedIn")[0].strip()
-
-    if " at " in tab_title:
-        role, _, company = tab_title.rpartition(" at ")
-        return role.strip(), company.strip()
-
-    return tab_title, ""
+    return _parse_browser_tab_title(tab_title)
 
 
 def _scrape_job_page(driver, url: str) -> dict:
@@ -523,6 +624,11 @@ def _scrape_job_page(driver, url: str) -> dict:
 
         # Expand the full description if it is collapsed.
         _click_see_more(driver)
+
+        # Prefer schema.org metadata for identity fields. Unlike visible
+        # headings and browser titles, these values are normally not wrapped
+        # in localized phrases such as "recrute pour des postes de".
+        structured_job = _scrape_structured_job_data(driver)
 
         # ---------------------------------------------------------------
         # Seniority / employment type chips
@@ -582,6 +688,14 @@ def _scrape_job_page(driver, url: str) -> dict:
                 "a[data-tracking-control-name='public_jobs_topcard-org-name']",
             ]
         )
+
+        # Structured data is the most precise source when present. Override
+        # generic selector results, which can accidentally capture a complete
+        # localized page heading instead of the actual role/company fields.
+        if structured_job.get("title"):
+            job["title"] = structured_job["title"]
+        if structured_job.get("company"):
+            job["company"] = structured_job["company"]
 
         if not job["title"] or not job["company"]:
             tab_role, tab_company = _browser_tab_parts(driver)
@@ -761,4 +875,3 @@ def search_jobs(
             except Exception:
                 pass
         driver = None
-     

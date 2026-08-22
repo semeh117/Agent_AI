@@ -9,7 +9,7 @@ check against hallucination.
 
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from config import get_llm
+from config import get_parser_llm
 from core.extraction_cache import get_cached, set_cached
 
 
@@ -55,7 +55,7 @@ def extract_job_requirements(job_title: str, job_description: str, llm=None ,use
                   f"({len(cached.required_skills)} skills, no wait).")
             return cached
     if llm is None:
-        llm = get_llm(temperature=0.0)
+        llm = get_parser_llm(temperature=0.0)
 
     structured_llm = llm.with_structured_output(JobRequirements)
 
