@@ -1,8 +1,4 @@
-"""Tests for the LinkedIn agent's cosine-similarity matcher.
-
-The tests use a fake embedding provider, so they are deterministic and do
-not download a sentence-transformer model or require API credentials.
-"""
+"""Deterministic tests for the one-job cosine compatibility matcher."""
 
 import os
 import sys
@@ -11,19 +7,32 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 from core.cosine_matcher import (
-    build_candidate_text,
-    build_job_text,
-    calculate_education_score,
-    calculate_experience_score,
+    DEFAULT_COSINE_THRESHOLD,
+    _apply_required_skill_groups,
+    calculate_compatibility_cosine as calculate_compatibility_cosine_with_esco,
     cosine_similarity,
-    rank_jobs_by_cosine,
+    rank_jobs_by_cosine as rank_jobs_by_cosine_with_esco,
 )
+from core.esco_normalizer import get_esco_normalizer
+from pipeline.linkedin_cosine_pipeline import match_linkedin_jobs
+
+
+def calculate_compatibility_cosine(*args, **kwargs):
+    """Keep legacy matcher unit cases isolated; ESCO has dedicated cases below."""
+
+    kwargs.setdefault("use_esco", False)
+    return calculate_compatibility_cosine_with_esco(*args, **kwargs)
+
+
+def rank_jobs_by_cosine(*args, **kwargs):
+    kwargs.setdefault("use_esco", False)
+    return rank_jobs_by_cosine_with_esco(*args, **kwargs)
 
 
 def candidate(**overrides):
     values = {
-        "job_titles": ["Machine Learning Engineer", "Data Scientist"],
         "skills": ["Python", "PyTorch", "Docker"],
         "experience_years": 2.5,
         "highest_education_level": "Master",
@@ -34,8 +43,7 @@ def candidate(**overrides):
 
 def requirements(**overrides):
     values = {
-        "job_title": None,
-        "seniority_level": None,
+        "job_title": "AI Engineer",
         "required_skills": [],
         "required_experience_years": None,
         "required_education_level": None,
@@ -45,179 +53,482 @@ def requirements(**overrides):
 
 
 class FakeEmbeddings:
-    """Return configured vectors while recording embedding calls."""
-
-    def __init__(self, candidate_vector, job_vectors):
-        self.candidate_vector = candidate_vector
-        self.job_vectors = job_vectors
-        self.query_calls = []
-        self.document_calls = []
-
-    def embed_query(self, text):
-        self.query_calls.append(text)
-        return self.candidate_vector
+    def __init__(self, vectors):
+        self.vectors = vectors
+        self.calls = []
 
     def embed_documents(self, texts):
-        self.document_calls.append(list(texts))
-        return self.job_vectors[: len(texts)]
+        self.calls.append(list(texts))
+        return [self.vectors[text] for text in texts]
 
 
-def test_build_candidate_text_uses_only_unique_skills():
-    cv = candidate(
-        job_titles=["ML Engineer", "ML Engineer", "Data Scientist"],
-        skills=["Python", "python", "Docker", ""],
-    )
-
-    text = build_candidate_text(cv)
-
-    assert text == "Candidate skills: Python, Docker."
-    assert "ML Engineer" not in text
-
-
-def test_build_job_text_uses_parsed_requirements():
-    job = {"title": "Fallback title"}
-    parsed = requirements(
-        job_title="AI Engineer",
-        seniority_level="Senior",
-        required_skills=["Python", "Docker", "python"],
-    )
-
-    text = build_job_text(job, parsed)
-
-    assert text == "Required skills: Python, Docker."
-    assert "AI Engineer" not in text
-    assert "Senior" not in text
-
-
-def test_build_job_text_does_not_add_scraped_title():
-    text = build_job_text(
-        {"title": "Backend Engineer"},
-        requirements(required_skills=["Python"]),
-    )
-
-    assert text == "Required skills: Python."
-    assert "Backend Engineer" not in text
-
-
-def test_experience_score_uses_candidate_required_ratio():
-    assert isclose(calculate_experience_score(0.17, 5.0), 0.034)
-    assert calculate_experience_score(6.0, 5.0) == 1.0
-    assert calculate_experience_score(0.17, None) == 1.0
-
-
-def test_education_score_uses_ordered_levels():
-    assert calculate_education_score("Master", "Bachelor") == 1.0
-    assert calculate_education_score("Bachelor", "Master") == 0.5
-    assert calculate_education_score("High School", "Master") == 0.0
-    assert calculate_education_score("Master", None) == 1.0
-
-
-def test_cosine_similarity_for_identical_vectors():
-    assert isclose(cosine_similarity([1, 2, 3], [1, 2, 3]), 1.0)
-
-
-def test_cosine_similarity_for_orthogonal_vectors():
-    assert isclose(cosine_similarity([1, 0], [0, 1]), 0.0)
-
-
-def test_cosine_similarity_for_zero_vector_is_zero():
-    assert cosine_similarity([0, 0], [1, 1]) == 0.0
-
-
-def test_cosine_similarity_rejects_different_dimensions():
+def with_fake_embeddings(fake, function):
+    original = config.get_embeddings
+    config.get_embeddings = lambda: fake
     try:
-        cosine_similarity([1, 2], [1, 2, 3])
+        return function()
+    finally:
+        config.get_embeddings = original
+
+
+def test_cosine_similarity_math_and_dimension_validation():
+    assert isclose(cosine_similarity([1, 2], [1, 2]), 1.0)
+    assert isclose(cosine_similarity([1, 0], [0, 1]), 0.0)
+    assert cosine_similarity([0, 0], [1, 1]) == 0.0
+    try:
+        cosine_similarity([1], [1, 2])
     except ValueError as exc:
         assert "dimensions must match" in str(exc)
     else:
-        raise AssertionError("Different embedding dimensions must raise ValueError")
+        raise AssertionError("Dimension mismatch must fail.")
 
 
-def test_rank_jobs_descending_and_embed_in_one_batch():
-    jobs = [
-        (
-            {"title": "Accountant", "company": "Finance Co", "url": "u1"},
-            requirements(job_title="Accountant", required_skills=["Excel"]),
-        ),
-        (
-            {"title": "AI Engineer", "company": "AI Co", "url": "u2"},
-            requirements(
-                job_title="AI Engineer",
-                required_skills=["Python", "PyTorch"],
-                required_experience_years=3,
-                required_education_level="Bachelor",
-            ),
-        ),
-        (
-            {"title": "Data Engineer", "company": "Data Co", "url": "u3"},
-            requirements(
-                job_title="Data Engineer",
-                required_skills=["Python", "SQL"],
-            ),
-        ),
-    ]
-    embeddings = FakeEmbeddings(
-        candidate_vector=[1.0, 0.0],
-        # Scores in input order: 0%, 100%, 60%.
-        job_vectors=[[0.0, 1.0], [1.0, 0.0], [0.6, 0.8]],
+def test_normalized_literal_matches_do_not_load_embeddings():
+    original = config.get_embeddings
+    config.get_embeddings = lambda: (_ for _ in ()).throw(
+        AssertionError("Exact matches must not load embeddings.")
     )
-
-    ranked = rank_jobs_by_cosine(candidate(), jobs, embeddings=embeddings)
-
-    assert [item["job_title"] for item in ranked] == [
-        "AI Engineer",
-        "Data Engineer",
-        "Accountant",
-    ]
-    assert [item["skills_score"] for item in ranked] == [100.0, 60.0, 0.0]
-    assert [item["final_score"] for item in ranked] == [95.0, 80.0, 50.0]
-    assert len(embeddings.query_calls) == 1
-    assert len(embeddings.document_calls) == 1
-    assert len(embeddings.document_calls[0]) == 3
-
-    top = ranked[0]
-    assert top["candidate_experience_years"] == 2.5
-    assert top["required_experience_years"] == 3
-    assert top["candidate_education"] == "Master"
-    assert top["required_education"] == "Bachelor"
-    assert top["experience_score"] == 83.3
-    assert top["education_score"] == 100.0
-
-
-def test_job_without_semantic_information_is_inconclusive_and_last():
-    jobs = [
-        ({"title": "", "company": "Unknown", "url": "empty"}, requirements()),
-        (
-            {"title": "Python Developer", "company": "Acme", "url": "valid"},
-            requirements(required_skills=["Python"]),
-        ),
-    ]
-    embeddings = FakeEmbeddings(
-        candidate_vector=[1.0, 0.0],
-        job_vectors=[[1.0, 0.0]],
-    )
-
-    ranked = rank_jobs_by_cosine(candidate(), jobs, embeddings=embeddings)
-
-    assert ranked[0]["url"] == "valid"
-    assert ranked[0]["inconclusive"] is False
-    assert ranked[1]["url"] == "empty"
-    assert ranked[1]["inconclusive"] is True
-    assert ranked[1]["skills_score"] == 0.0
-    assert ranked[1]["final_score"] == 50.0
-    assert len(embeddings.document_calls[0]) == 1
-
-
-def test_candidate_without_skills_is_rejected():
-    empty_candidate = candidate(job_titles=[], skills=[])
-    embeddings = FakeEmbeddings([1.0], [])
-
     try:
-        rank_jobs_by_cosine(empty_candidate, [], embeddings=embeddings)
-    except ValueError as exc:
-        assert "no skills" in str(exc)
-    else:
-        raise AssertionError("An empty candidate profile must raise ValueError")
+        result = calculate_compatibility_cosine(
+            candidate(skills=["Python", "Docker Compose"]),
+            requirements(required_skills=["python", "Docker-Compose"]),
+        )
+    finally:
+        config.get_embeddings = original
+
+    assert result["skills"]["score"] == 1.0
+    assert result["skills"]["missing"] == []
+    assert result["skills"]["matching"][1]["matched_via"] == "Docker Compose"
+
+
+def test_partial_names_and_contextual_phrases_are_not_literal_matches():
+    fake = FakeEmbeddings(
+        {
+            "Claude": [1.0, 0.0],
+            "regression suites": [1.0, 0.0],
+            "Claude Code": [0.0, 1.0],
+            "regression": [0.0, 1.0],
+        }
+    )
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["Claude", "regression suites"]),
+            requirements(required_skills=["Claude Code", "regression"]),
+        ),
+    )
+
+    assert result["skills"]["matching"] == []
+    assert result["skills"]["missing"] == ["Claude Code", "regression"]
+
+
+def test_reviewed_aliases_match_without_loading_embeddings():
+    original = config.get_embeddings
+    config.get_embeddings = lambda: (_ for _ in ()).throw(
+        AssertionError("Reviewed aliases must resolve before embeddings.")
+    )
+    try:
+        result = calculate_compatibility_cosine(
+            candidate(
+                skills=[
+                    "Claude",
+                    "retrieval-augmented generation",
+                    "LLM API integrations",
+                    "OpenAI API",
+                    "Git/GitHub",
+                ]
+            ),
+            requirements(
+                required_skills=[
+                    "Anthropic Claude",
+                    "RAG systems",
+                    "RAG techniques",
+                    "RAG patterns",
+                    "LLM APIs",
+                    "OpenAI",
+                    "Git",
+                ]
+            ),
+        )
+    finally:
+        config.get_embeddings = original
+
+    assert result["skills"]["score"] == 1.0
+    assert result["skills"]["missing"] == []
+
+
+def test_specific_tools_prove_broad_capabilities_only_one_way():
+    original = config.get_embeddings
+    config.get_embeddings = lambda: (_ for _ in ()).throw(
+        AssertionError("Reviewed capability evidence must resolve before embeddings.")
+    )
+    try:
+        result = calculate_compatibility_cosine(
+            candidate(skills=["ChromaDB", "Git/GitHub", "Random Forest"]),
+            requirements(
+                required_skills=[
+                    "vector databases",
+                    "Version control software",
+                    "Machine learning models",
+                ]
+            ),
+        )
+    finally:
+        config.get_embeddings = original
+
+    assert result["skills"]["score"] == 1.0
+    assert result["skills"]["missing"] == []
+    assert all(
+        "capability evidence" in match["matched_via"]
+        for match in result["skills"]["matching"]
+    )
+
+
+def test_capitalized_general_concept_can_reach_cosine():
+    fake = FakeEmbeddings(
+        {
+            "all-MiniLM-L6-v2 embeddings": [1.0, 0.0],
+            "Embeddings": [0.8, 0.6],
+        }
+    )
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["all-MiniLM-L6-v2 embeddings"]),
+            requirements(required_skills=["Embeddings"]),
+            threshold=0.59,
+        ),
+    )
+
+    assert result["skills"]["matching"] == [
+        {
+            "job_skill": "Embeddings",
+            "matched_via": "all-MiniLM-L6-v2 embeddings (cosine=0.80)",
+        }
+    ]
+
+
+def test_esco_preferred_and_alternative_labels_share_one_concept():
+    normalizer = get_esco_normalizer()
+    preferred = normalizer.normalize("manage musical staff")
+    alternative = normalizer.normalize("manage music staff")
+
+    assert normalizer.concept_count > 10_000
+    assert preferred.mapped is True
+    assert alternative.mapped is True
+    assert preferred.concept_uri == alternative.concept_uri
+    assert alternative.preferred_label == "manage musical staff"
+    assert normalizer.normalize("LangChain").mapped is False
+
+
+def test_esco_concept_match_is_explainable_and_skips_embeddings():
+    original = config.get_embeddings
+    config.get_embeddings = lambda: (_ for _ in ()).throw(
+        AssertionError("The same ESCO concept must match before embeddings.")
+    )
+    try:
+        result = calculate_compatibility_cosine_with_esco(
+            candidate(skills=["manage music staff"]),
+            requirements(required_skills=["manage musical staff"]),
+        )
+    finally:
+        config.get_embeddings = original
+
+    assert result["skills"]["score"] == 1.0
+    assert result["skills"]["missing"] == []
+    assert result["skills"]["matching"] == [
+        {
+            "job_skill": "manage musical staff",
+            "matched_via": "manage music staff (ESCO: manage musical staff)",
+        }
+    ]
+    assert result["skills"]["normalization"]["candidate_mapped"] == 1
+    assert result["skills"]["normalization"]["required_mapped"] == 1
+
+
+def test_live_false_pairs_are_blocked_even_with_identical_embeddings():
+    candidates = [
+        "Llama",
+        "RAGAS",
+        "LLM evaluation",
+        "AWS Bedrock",
+        "DeepEval",
+        "prompt versioning",
+        "regression suites",
+        "Claude",
+    ]
+    required = [
+        "LlamaIndex",
+        "RAG systems",
+        "LLM APIs",
+        "LLM pipeline",
+        "AWS ECS",
+        "DeepAgent",
+        "version control",
+        "regression",
+        "Claude Code",
+    ]
+    pair_index = {
+        "Llama": 0,
+        "LlamaIndex": 0,
+        "RAGAS": 1,
+        "RAG systems": 1,
+        "LLM evaluation": 2,
+        "LLM APIs": 2,
+        "LLM pipeline": 2,
+        "AWS Bedrock": 3,
+        "AWS ECS": 3,
+        "DeepEval": 4,
+        "DeepAgent": 4,
+        "prompt versioning": 5,
+        "version control": 5,
+        "regression suites": 6,
+        "regression": 6,
+        "Claude": 7,
+        "Claude Code": 7,
+    }
+    fake = FakeEmbeddings(
+        {
+            skill: [1.0 if position == pair_index[skill] else 0.0 for position in range(8)]
+            for skill in candidates + required
+        }
+    )
+
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=candidates),
+            requirements(required_skills=required),
+        ),
+    )
+
+    assert result["skills"]["matching"] == []
+    assert result["skills"]["missing"] == required
+
+
+def test_semantic_matching_embeds_each_skill_and_explains_matches():
+    fake = FakeEmbeddings(
+        {
+            "Python": [0.0, 1.0],
+            "PyTorch": [1.0, 0.0],
+            "Deep Learning": [0.8, 0.6],
+            "Kubernetes": [-1.0, 0.0],
+        }
+    )
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["Python", "PyTorch"]),
+            requirements(required_skills=["Deep Learning", "Kubernetes"]),
+            threshold=0.65,
+        ),
+    )
+
+    assert fake.calls == [["Python", "PyTorch", "Deep Learning", "Kubernetes"]]
+    assert result["skills"]["score"] == 0.5
+    assert result["skills"]["matching"] == [
+        {"job_skill": "Deep Learning", "matched_via": "PyTorch (cosine=0.80)"}
+    ]
+    assert result["skills"]["missing"] == ["Kubernetes"]
+
+
+def test_calibrated_default_threshold_is_used():
+    fake = FakeEmbeddings(
+        {
+            "Candidate skill": [1.0, 0.0],
+            "Job requirement": [0.60, 0.80],
+        }
+    )
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["Candidate skill"]),
+            requirements(required_skills=["Job requirement"]),
+        ),
+    )
+
+    assert DEFAULT_COSINE_THRESHOLD == 0.59
+    assert result["skills"]["matching"] == [
+        {
+            "job_skill": "Job requirement",
+            "matched_via": "Candidate skill (cosine=0.60)",
+        }
+    ]
+
+
+def test_short_skill_is_not_matched_inside_an_unrelated_word():
+    fake = FakeEmbeddings({"LangChain": [1.0, 0.0], "AI": [0.0, 1.0]})
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["LangChain"]),
+            requirements(required_skills=["AI"]),
+        ),
+    )
+
+    assert result["skills"]["matching"] == []
+    assert result["skills"]["missing"] == ["AI"]
+
+
+def test_product_prefix_is_not_treated_as_an_exact_skill_match():
+    fake = FakeEmbeddings({"Llama": [1.0, 0.0], "LlamaIndex": [0.0, 1.0]})
+    result = with_fake_embeddings(
+        fake,
+        lambda: calculate_compatibility_cosine(
+            candidate(skills=["Llama"]),
+            requirements(required_skills=["LlamaIndex"]),
+        ),
+    )
+
+    assert result["skills"]["matching"] == []
+    assert result["skills"]["missing"] == ["LlamaIndex"]
+
+
+def test_output_shape_and_weighted_score_match_core_matcher():
+    result = calculate_compatibility_cosine(
+        candidate(skills=["Python"], experience_years=2.5),
+        requirements(
+            required_skills=["Python"],
+            required_experience_years=5.0,
+            required_education_level="Bachelor",
+        ),
+    )
+
+    assert set(result) == {"score_percent", "skills", "experience", "education"}
+    assert result["skills"]["score"] == 1.0
+    assert result["experience"]["score"] == 0.5
+    assert result["education"]["score"] == 1.0
+    assert result["score_percent"] == 85.0
+
+
+def test_empty_required_skills_is_inconclusive_and_scores_one_half():
+    result = calculate_compatibility_cosine(candidate(), requirements())
+
+    assert result["skills"]["score"] == 0.5
+    assert result["skills"]["matching"] == []
+    assert result["skills"]["missing"] == []
+    assert "inconclusive" in result["skills"]["note"]
+    assert result["score_percent"] == 75.0
+
+
+def test_fixed_inputs_produce_identical_results():
+    fake = FakeEmbeddings({"PyTorch": [1.0, 0.0], "Deep Learning": [0.8, 0.6]})
+    cv = candidate(skills=["PyTorch"])
+    job = requirements(required_skills=["Deep Learning"])
+
+    first = with_fake_embeddings(fake, lambda: calculate_compatibility_cosine(cv, job))
+    second = with_fake_embeddings(fake, lambda: calculate_compatibility_cosine(cv, job))
+
+    assert first == second
+
+
+def test_ranking_wrapper_scores_each_job_with_the_same_shape():
+    fake = FakeEmbeddings(
+        {
+            "Python": [1.0, 0.0],
+            "Accounting": [0.0, 1.0],
+        }
+    )
+    jobs = [
+        (
+            {"title": "Accountant", "company": "Fin", "url": "u1"},
+            requirements(job_title="Accountant", required_skills=["Accounting"]),
+        ),
+        (
+            {"title": "Python Engineer", "company": "AI", "url": "u2"},
+            requirements(job_title="Python Engineer", required_skills=["Python"]),
+        ),
+    ]
+
+    ranked = rank_jobs_by_cosine(
+        candidate(skills=["Python"]), jobs, embeddings=fake, threshold=0.65
+    )
+
+    assert [item["url"] for item in ranked] == ["u2", "u1"]
+    assert [item["skills_score"] for item in ranked] == [100.0, 0.0]
+    assert ranked[0]["skills_detail"]["matching"][0]["job_skill"] == "Python"
+
+
+def test_explicit_alternatives_are_scored_as_one_requirement_each():
+    result = calculate_compatibility_cosine(
+        candidate(skills=["PyTorch"]),
+        requirements(
+            required_skills=[
+                "TensorFlow",
+                "PyTorch",
+                "Scikit-learn",
+                "AWS",
+                "Azure",
+            ],
+            required_skill_groups=[
+                ["TensorFlow", "PyTorch", "Scikit-learn"],
+                ["AWS", "Azure"],
+            ],
+        ),
+    )
+
+    assert result["skills"]["score"] == 0.5
+    assert result["skills"]["matching"] == [
+        {
+            "job_skill": "one of: TensorFlow | PyTorch | Scikit-learn",
+            "matched_via": "PyTorch <- PyTorch",
+        }
+    ]
+    assert result["skills"]["missing"] == ["one of: AWS | Azure"]
+    assert result["skills"]["normalization"]["raw_required_total"] == 5
+    assert result["skills"]["normalization"]["scored_requirement_total"] == 2
+
+
+def test_oversized_alternative_group_is_ignored():
+    skills = [f"Skill {index}" for index in range(1, 10)]
+    original = {
+        "score": 1 / len(skills),
+        "matching": [{"job_skill": skills[0], "matched_via": skills[0]}],
+        "missing": skills[1:],
+        "normalization": {
+            "enabled": False,
+            "candidate_mapped": 0,
+            "required_mapped": 0,
+            "candidate_total": 1,
+            "required_total": len(skills),
+        },
+    }
+
+    result = _apply_required_skill_groups(original, [skills])
+
+    assert result == original
+
+
+def test_linkedin_pipeline_omits_duplicate_title_company_listings():
+    scraped = [
+        {"title": "AI Engineer", "company": "Example", "url": "u1", "description": "d1"},
+        {"title": "AI Engineer", "company": "Example", "url": "u2", "description": "d2"},
+        {"title": "ML Engineer", "company": "Other", "url": "u3", "description": "d3"},
+        {"title": "Data Engineer", "company": "Third", "url": "u4", "description": "d4"},
+    ]
+    requested_limits = []
+
+    def fake_search(**kwargs):
+        requested_limits.append(kwargs["max_jobs"])
+        return scraped
+
+    def fake_parser(job_title, job_description, use_cache):
+        return requirements(job_title=job_title, required_skills=["Python"])
+
+    result = match_linkedin_jobs(
+        candidate(skills=["Python"]),
+        query="AI Engineer Python",
+        max_jobs=3,
+        search_fn=fake_search,
+        parser_fn=fake_parser,
+    )
+
+    assert requested_limits == [5]
+    assert result["scraped_count"] == 4
+    assert result["unique_scraped_count"] == 3
+    assert result["duplicate_count"] == 1
+    assert result["parsed_count"] == 3
+    assert [job["url"] for job in result["ranked_jobs"]] == ["u1", "u3", "u4"]
 
 
 if __name__ == "__main__":
@@ -229,5 +540,4 @@ if __name__ == "__main__":
     for name, function in tests:
         function()
         print(f"[PASS] {name}")
-
     print(f"All {len(tests)} cosine matcher tests passed.")

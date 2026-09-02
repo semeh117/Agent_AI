@@ -1,8 +1,8 @@
 """Centralized model configuration.
 
-``get_llm`` remains the backwards-compatible factory used by Agent 1.
-Agent 2 uses the three role-specific factories so extraction, orchestration,
-and cover-letter writing can be benchmarked independently.
+``get_llm`` remains available for backwards compatibility. Both agents use the
+dedicated orchestration factory, while extraction and cover-letter writing use
+their own role-specific factories.
 """
 import os
 from dotenv import load_dotenv
@@ -11,6 +11,12 @@ load_dotenv()
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_LOCAL_ONLY = os.getenv("EMBEDDING_LOCAL_ONLY", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _build_llm(
@@ -54,6 +60,11 @@ def _build_llm(
             model=model,
             temperature=temperature,
             google_api_key=os.getenv("GEMINI_API_KEY"),
+            # The gRPC transport can fail certificate verification on some
+            # Windows installations even when ordinary HTTPS providers work.
+            # REST uses the environment's normal HTTPS certificate handling
+            # and is sufficient for the synchronous calls used here.
+            transport="rest",
         )
 
     if provider == "groq":
@@ -68,6 +79,11 @@ def _build_llm(
             # prompts on the 8k on-demand tier before generation starts.
             max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "2048")),
             max_retries=3,
+            # Groq can close an otherwise successful streamed generation with
+            # "Upstream idle timeout exceeded". Bypassing LangChain streaming
+            # makes the request retryable by the OpenAI client above and keeps
+            # both agents on the same reliable invocation mode.
+            disable_streaming=True,
         )
 
     if provider == "ollama":
@@ -112,10 +128,13 @@ def get_parser_llm(temperature: float = 0.0):
 
 
 def get_agent_llm(temperature: float = 0.0):
-    """Model used by Agent 2 for query planning and tool orchestration."""
+    """Model shared by Agent 1 and Agent 2 for tool orchestration."""
 
-    provider = os.getenv("AGENT_PROVIDER", "groq").lower()
-    model = os.getenv("AGENT_MODEL", "openai/gpt-oss-120b")
+    provider = os.getenv("AGENT_PROVIDER", "openrouter").lower()
+    model = os.getenv(
+        "AGENT_MODEL",
+        "nvidia/nemotron-3.5-lightning:free",
+    )
     return _build_llm(provider, model, temperature, role="agent")
 
 
@@ -132,4 +151,20 @@ def get_cover_letter_llm(temperature: float = 0.3):
 
 def get_embeddings():
     from langchain_huggingface import HuggingFaceEmbeddings
-    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+
+    try:
+        return HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            # Agent 2 already has its embedding weights in the Hugging Face
+            # cache. Loading cache-only avoids startup metadata requests,
+            # optional-file 404s, redirects, and unauthenticated Hub warnings.
+            model_kwargs={"local_files_only": EMBEDDING_LOCAL_ONLY},
+        )
+    except OSError as exc:
+        if not EMBEDDING_LOCAL_ONLY:
+            raise
+        raise RuntimeError(
+            f"Embedding model '{EMBEDDING_MODEL}' is not available in the local "
+            "Hugging Face cache. Set EMBEDDING_LOCAL_ONLY=false for one run to "
+            "download it, then restore EMBEDDING_LOCAL_ONLY=true."
+        ) from exc

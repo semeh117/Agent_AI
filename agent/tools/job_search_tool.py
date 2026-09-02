@@ -19,26 +19,23 @@ one function with two different output contracts.
 """
 
 import json
-import os
 from langchain_core.tools import tool
 from search.job_search import _search_jobs_core
 
-# Description length shown in the Observation. Runs are kept small
-# (results_count=3), so the agent sees the FULL text of each posting —
-# it needs as much of the description as possible to judge relevance and
-# ground the cover letter. The cap is only a safety net for a
-# pathological oversized posting: with a multi-step ReAct loop every
-# Observation is re-sent on the next call, so a truly enormous description
-# would still blow through small-model context windows. The FULL stored
-# text in job_search._last_search_results is never affected by this cap.
-DESCRIPTION_MAX_CHARS = int(os.getenv("JOB_DESCRIPTION_MAX_CHARS", "2500"))
-DESCRIPTION_SUMMARY_CHARS = int(os.getenv("JOB_DESCRIPTION_SUMMARY_CHARS", "20000"))
-
-
-def _shorten(description: str, limit: int = DESCRIPTION_MAX_CHARS) -> str:
-    if len(description) <= limit:
-        return description
-    return description[:limit].rstrip() + " … [truncated]"
+# Only metadata needed for the next ReAct decision is returned to the agent.
+# Full descriptions remain in search.job_search._last_search_results, where
+# evaluate_job_match and write_cover_letter retrieve them by URL. Keeping the
+# descriptions out of the scratchpad prevents each subsequent LLM call from
+# resending tens of thousands of tokens.
+AGENT_VISIBLE_JOB_FIELDS = (
+    "title",
+    "company",
+    "employment_type",
+    "seniority",
+    "url",
+    "salary_min",
+    "salary_max",
+)
 
 
 @tool
@@ -53,9 +50,11 @@ def search_jobs_for_agent(query: str, results_count: int = 3) -> str:
         query: search terms, e.g. "full stack developer"
         results_count: how many fresh postings to return (default 3)
 
-    Output: a short status line, then a JSON list of job postings (same
-    fields as search_real_jobs: title, company, employment_type,
-    seniority, description, categories, url, salary).
+    Output: a short status line, then a compact JSON list containing title,
+    company, employment type, seniority, URL, and available salary. Full job
+    descriptions are retained internally and recovered by URL during matching
+    and cover-letter generation; they are intentionally excluded here to keep
+    the agent context within provider token limits.
 
     If the status note says jobs were filtered out as already-seen, or
     that fewer postings came back than requested, do not just proceed
@@ -64,16 +63,12 @@ def search_jobs_for_agent(query: str, results_count: int = 3) -> str:
     """
     result = _search_jobs_core(query, results_count)
 
-    # Shallow-copy each job BEFORE shortening: _search_jobs_core already
-    # stored these SAME dicts (by reference) in job_search._last_search_results,
-    # and evaluate_job_match + the cover-letter step fetch the FULL posting
-    # back from there. Mutating them in place would overwrite the full
-    # description with the summary and silently degrade scoring.
-    jobs = [dict(job) for job in result["jobs"]]
-    for job in jobs:
-        job["description"] = _shorten(
-            job.get("description", ""), DESCRIPTION_SUMMARY_CHARS
-        )
+    # Build new compact dictionaries; never mutate _search_jobs_core's jobs,
+    # because those same objects hold the full descriptions used downstream.
+    jobs = [
+        {field: job.get(field) for field in AGENT_VISIBLE_JOB_FIELDS}
+        for job in result["jobs"]
+    ]
     filtered = result["filtered_seen_count"]
     returned = result["returned_count"]
     requested = result["requested_count"]

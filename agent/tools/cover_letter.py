@@ -110,20 +110,22 @@ def _normalize_matching_skills(matching_skills) -> list:
 
 
 @tool
-def write_cover_letter(evaluated_job_json: str) -> str:
+def write_cover_letter(
+    evaluated_job_json: str = "",
+    url: str = "",
+) -> str:
     """
     Writes a cover letter for a SINGLE job, using the candidate's profile
     and that job's match details. Call this AFTER evaluate_job_match has
     scored the job you want a cover letter for — typically the highest
     scoring one.
 
-    Input: a JSON string with the SAME shape evaluate_job_match returns:
-    job_title, company, score_percent, matching_skills, missing_skills.
-    You can also include "description" if you have it (from the original
-    search_real_jobs result) for a more grounded letter — if omitted,
-    the letter will note less detail about the role itself. Passing just
-    the job's "url" also works: the full evaluation recorded earlier this
-    run is looked up automatically.
+    Preferred input: pass the selected job URL directly in the ``url``
+    argument. The complete evaluation recorded earlier in the run is looked
+    up automatically. For backwards compatibility, ``evaluated_job_json``
+    may instead contain a JSON string with the SAME shape returned by
+    evaluate_job_match: job_title, company, score_percent, matching_skills,
+    and missing_skills. A JSON string containing only ``url`` also works.
 
     Output: a short confirmation that the letter was written (NOT the
     full letter text — you do not need to copy or repeat it anywhere).
@@ -135,9 +137,19 @@ def write_cover_letter(evaluated_job_json: str) -> str:
     if job_evaluator._current_cv_info is None:
         return "Error: No candidate profile loaded."
 
+    # Native tool-calling models naturally emit {"url": "..."}. Previously
+    # they had to wrap that object inside a second JSON-encoded string named
+    # evaluated_job_json, which caused schema-validation failures before this
+    # function could run. Keep the legacy string input while accepting the
+    # simple URL form directly.
+    if url and not evaluated_job_json:
+        evaluated_job_json = json.dumps({"url": url}, ensure_ascii=False)
+    if not evaluated_job_json:
+        return "Error: A job URL or evaluated job JSON is required."
+
     try:
         job = json.loads(evaluated_job_json)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return f"Error: Invalid JSON input: {evaluated_job_json[:100]}"
 
     required = ["job_title", "company", "score_percent", "matching_skills", "missing_skills"]

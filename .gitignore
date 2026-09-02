@@ -7,3 +7,5 @@ cv/
 credentials.json
 token.json
 cache/
+data/
+temp/

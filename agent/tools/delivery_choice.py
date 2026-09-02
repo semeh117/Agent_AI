@@ -8,7 +8,7 @@ the cover letter and delivering, then calls the matching transport tool
 (send_results_draft for Gmail, send_results_telegram for Telegram).
 
 The chosen channel is recorded in module state so the deterministic
-completion (agent2_full_auto._complete_deterministically) knows which
+completion (agent1._complete_deterministically) knows which
 delivery to guarantee if the agent skips it — same pattern as
 cover_letter_tool's _last_cover_letter.
 """

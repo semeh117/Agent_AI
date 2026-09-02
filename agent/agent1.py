@@ -1,5 +1,5 @@
 """
-agent2_full_auto.py
+agent1.py
 --------------
 PATH B — fully agent-driven. The LLM itself decides, as further steps
 in its own ReAct loop, when to write the cover letter, when to ask the
@@ -11,7 +11,7 @@ OBSERVED FAILURE MODE (kept here deliberately, not smoothed over): in
 testing with qwen-2.5-7b-instruct, the model has twice produced a Final
 Answer confidently claiming "a Gmail draft has been created" while its
 own intermediate_steps show send_results_draft was never actually
-called. The verification block in run_agent2_full_auto() below is a
+called. The verification block in run_agent1() below is a
 fallback that catches this and completes the step for real — meaning
 this path currently only works BECAUSE of that fallback, not because
 the agent reliably follows the prompted workflow. Compare against
@@ -21,7 +21,7 @@ nothing past ranking is left to the LLM's judgment.
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
-from config import get_llm
+from config import get_agent_llm
 from agent.agent_core import TOOLS
 from agent.react_output_parser import RequiredToolsVerifyingParser
 import agent.tools.job_evaluator as job_evaluator  # module import — need the
@@ -161,8 +161,9 @@ Begin!
 Question: {input}
 Thought:{agent_scratchpad}"""
 
-def build_agent2_executor(verbose: bool = True) -> AgentExecutor:
-    llm = get_llm(temperature=0.0)
+def build_agent1_executor(verbose: bool = True) -> AgentExecutor:
+    # Use the same dedicated orchestration provider/model as Agent 2.
+    llm = get_agent_llm(temperature=0.0)
     prompt = PromptTemplate.from_template(REACT_PROMPT_TEMPLATE_WITH_COVER_LETTER_AND_EMAIL)
     agent = create_react_agent(llm=llm, tools=TOOLS_WITH_COVER_LETTER_AND_DELIVERY, prompt=prompt,
                                output_parser=RequiredToolsVerifyingParser(
@@ -181,7 +182,7 @@ def build_agent2_executor(verbose: bool = True) -> AgentExecutor:
     )
 
 
-def run_agent2_full_auto(cv_info, results_count: int = 3) -> dict:
+def run_agent1(cv_info, results_count: int = 3) -> dict:
     """
     cv_info must have cv_info.mail set for the Gmail draft step to
     succeed — see agent/tools/gmail.py's error handling if it's missing.
@@ -189,7 +190,7 @@ def run_agent2_full_auto(cv_info, results_count: int = 3) -> dict:
     set_candidate_profile(cv_info)
     delivery_choice._last_delivery_channel = None  # fresh user answer each run
 
-    executor = build_agent2_executor(verbose=True)
+    executor = build_agent1_executor(verbose=True)
 
     profile_summary = (
         f"Most recent title: {cv_info.job_titles[0] if cv_info.job_titles else 'N/A'}. "
@@ -221,8 +222,10 @@ def _complete_deterministically(result: dict) -> dict:
          order and the chosen #1 are never left to the LLM's arithmetic).
       2. Guarantee a cover letter exists for the TRUE top match, writing it
          now if the agent skipped it or wrote one for the wrong job.
-      3. Guarantee the Gmail draft was actually created, creating it now if
-         the agent claimed it without calling the tool.
+      3. Guarantee the final cover letter was delivered on the chosen channel.
+         If step 2 replaced a wrong letter after an earlier delivery, deliver
+         the corrected letter again instead of treating the stale delivery as
+         valid.
 
     Appends a deterministic ranked list and any corrective notes to the
     output so the final answer always shows jobs in descending score order.
@@ -260,6 +263,7 @@ def _complete_deterministically(result: dict) -> dict:
         and letter_job.get("job_title") == top["job_title"]
         and letter_job.get("company") == top["company"]
     )
+    cover_letter_was_replaced = False
     if not wrote_for_top:
         if letter is not None:
             notes.append(
@@ -291,7 +295,16 @@ def _complete_deterministically(result: dict) -> dict:
             "missing_skills": top["missing_skills"],
             "description": description,
         })
-        notes.append(f"Cover letter result: {write_cover_letter.func(letter_call)}")
+        cover_observation = write_cover_letter.func(letter_call)
+        notes.append(f"Cover letter result: {cover_observation}")
+
+        corrected_job = cover_letter_tool._last_cover_letter_job
+        cover_letter_was_replaced = (
+            cover_letter_tool._last_cover_letter is not None
+            and corrected_job is not None
+            and corrected_job.get("job_title") == top["job_title"]
+            and corrected_job.get("company") == top["company"]
+        )
 
     # --- 3. Deliver on the channel the USER chose ---
     # Best-effort resolution: if the agent actually called
@@ -320,8 +333,19 @@ def _complete_deterministically(result: dict) -> dict:
 
     to_call = send_results_draft if channel_tool == "send_results_draft" else send_results_telegram
 
-    if cover_letter_tool._last_cover_letter is None:
-        notes.append("No cover letter exists, so nothing could be delivered.")
+    final_letter_job = cover_letter_tool._last_cover_letter_job
+    final_letter_is_for_top = (
+        cover_letter_tool._last_cover_letter is not None
+        and final_letter_job is not None
+        and final_letter_job.get("job_title") == top["job_title"]
+        and final_letter_job.get("company") == top["company"]
+    )
+
+    if not final_letter_is_for_top:
+        notes.append(
+            "No valid cover letter exists for the true top job, so nothing "
+            "was delivered."
+        )
     else:
         right_channel_ok = any(
             tool == channel_tool and _delivered(tool, obs)
@@ -336,7 +360,19 @@ def _complete_deterministically(result: dict) -> dict:
             for tool, obs in delivery_calls
         )
 
-        if right_channel_ok:
+        if cover_letter_was_replaced:
+            stale_delivery_note = (
+                " An earlier delivery may still contain the previous job's "
+                "letter; it was not deleted automatically."
+                if right_channel_ok or wrong_channel_delivered
+                else ""
+            )
+            notes.append(
+                f"The cover letter changed after deterministic ranking, so the "
+                f"corrected letter was delivered via {channel}. Result: "
+                f"{to_call.func('')}{stale_delivery_note}"
+            )
+        elif right_channel_ok:
             pass  # already delivered on the right channel — nothing to fix
         elif wrong_channel_delivered:
             notes.append(

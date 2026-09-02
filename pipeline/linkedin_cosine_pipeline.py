@@ -12,6 +12,34 @@ from typing import Any, Callable, Optional
 from core.cosine_matcher import rank_jobs_by_cosine
 
 
+def _deduplicate_scraped_jobs(
+    jobs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Keep one recommendation per normalized title/company pair."""
+
+    unique: list[dict[str, Any]] = []
+    duplicates: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for job in jobs:
+        title = " ".join(str(job.get("title") or "").casefold().split())
+        company = " ".join(str(job.get("company") or "").casefold().split())
+        identity = (title, company)
+        if title and company and identity in seen:
+            duplicates.append(
+                {
+                    "title": str(job.get("title") or ""),
+                    "company": str(job.get("company") or ""),
+                    "url": str(job.get("url") or ""),
+                    "reason": "Duplicate title/company listing omitted.",
+                }
+            )
+            continue
+        if title and company:
+            seen.add(identity)
+        unique.append(job)
+    return unique, duplicates
+
+
 def build_linkedin_query(cv_info: Any, max_skills: int = 3) -> str:
     """Build a compact LinkedIn query from the candidate's parsed CV."""
 
@@ -73,18 +101,22 @@ def match_linkedin_jobs(
         search_fn = search_jobs
 
     if parser_fn is None:
-        from core.job_parser import extract_job_requirements
+        from core.agent2_parser import extract_job_requirements_agent2
 
-        parser_fn = extract_job_requirements
+        parser_fn = extract_job_requirements_agent2
 
-    scraped_jobs = search_fn(
+    # Collect a small reserve so duplicate LinkedIn listings do not consume
+    # all requested recommendation slots.
+    search_limit = min(50, max_jobs + 2)
+    raw_scraped_jobs = search_fn(
         query=resolved_query,
         location=resolved_location,
-        max_jobs=max_jobs,
+        max_jobs=search_limit,
     )
+    scraped_jobs, duplicate_jobs = _deduplicate_scraped_jobs(raw_scraped_jobs)
 
     parsed_jobs: list[tuple[dict[str, Any], Any]] = []
-    skipped_jobs: list[dict[str, str]] = []
+    skipped_jobs: list[dict[str, str]] = list(duplicate_jobs)
 
     for job in scraped_jobs:
         title = str(job.get("title") or "").strip()
@@ -120,6 +152,8 @@ def match_linkedin_jobs(
             continue
 
         parsed_jobs.append((job, requirements))
+        if len(parsed_jobs) >= max_jobs:
+            break
 
     ranked_jobs = (
         rank_jobs_by_cosine(cv_info, parsed_jobs, embeddings=embeddings)
@@ -131,9 +165,26 @@ def match_linkedin_jobs(
         "query": resolved_query,
         "location": resolved_location,
         "requested_count": max_jobs,
-        "scraped_count": len(scraped_jobs),
+        "scraped_count": len(raw_scraped_jobs),
+        "unique_scraped_count": len(scraped_jobs),
+        "duplicate_count": len(duplicate_jobs),
         "parsed_count": len(parsed_jobs),
         "skipped_count": len(skipped_jobs),
         "skipped_jobs": skipped_jobs,
+        "scoring_notes": {
+            "skills_score": (
+                "Percentage of scored required-skill units satisfied. Exact, "
+                "reviewed alias, ESCO-concept, and thresholded cosine matches "
+                "can satisfy a unit; explicit alternative lists count once."
+            ),
+            "esco_counts": (
+                "Normalization counts report ESCO dataset coverage only; they "
+                "are not candidate-job match counts."
+            ),
+            "unspecified_requirements": (
+                "An unspecified experience or education requirement receives "
+                "no penalty (100), but is not evidence of a verified match."
+            ),
+        },
         "ranked_jobs": ranked_jobs,
     }

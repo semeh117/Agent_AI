@@ -324,21 +324,6 @@ def _clean_text(text: str) -> str:
     return "\n".join(lines)
 
 
-def _flat_text(text: str) -> str:
-    """
-    Collapse ALL whitespace (newlines, tabs, repeated spaces) into single
-    spaces. The tool Observation handed to the LLM is the RAW JSON string,
-    so any newline is serialized as the literal `\\n` sequence the model has
-    to read. Flattening keeps the description one clean line of text —
-    easier for requirement extraction than a wall of `\\n` escapes.
-    """
-
-    if not text:
-        return ""
-
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def _scrape_criteria(driver) -> tuple:
     """
     Collect the job-criteria chips from the LinkedIn job card
@@ -711,7 +696,10 @@ def _scrape_job_page(driver, url: str) -> dict:
         
         job["title"] = _clean_text(job["title"])
         job["company"] = _clean_text(job["company"])
-        job["description"] = _flat_text(job["description"])
+        # Preserve paragraph and bullet boundaries for the requirement parser.
+        # Flattening the description into one line can make an ``including``
+        # or ``such as`` clause absorb requirements from later bullets.
+        job["description"] = _clean_text(job["description"])
         return job
 
     except Exception as exc:

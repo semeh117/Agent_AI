@@ -1,6 +1,6 @@
 """Agent-facing LinkedIn matching tool for Agent 2.
 
-The future Agent 2 decides what query and location to use. This tool runs the
+    Agent 2 decides what query and location to use. This tool runs the
 deterministic production workflow:
 
     LinkedIn scrape -> job parsing -> skills cosine similarity
@@ -21,6 +21,27 @@ _current_cv_info: Any = None
 _current_location = ""
 _current_results_count = 3
 _last_match_result: dict[str, Any] | None = None
+
+
+def sync_linkedin_results_for_shared_tools(result: dict[str, Any]) -> None:
+    """Expose Agent 2 rankings in the shape expected by shared delivery tools.
+
+    The cover-letter, Gmail, and Telegram tools predate Agent 2 and read their
+    ranked jobs from ``job_evaluator``. Keeping this adapter here lets Agent 2
+    reuse those tools without coupling them to LinkedIn or cosine matching.
+    """
+
+    import agent.tools.job_evaluator as job_evaluator
+
+    job_evaluator._all_evaluations = [
+        {
+            **job,
+            "score_percent": job.get("score_percent", job.get("final_score", 0.0)),
+            "matching_skills": job.get("skills_detail", {}).get("matching", []),
+            "missing_skills": job.get("skills_detail", {}).get("missing", []),
+        }
+        for job in result.get("ranked_jobs", [])
+    ]
 
 
 def set_candidate_profile(
@@ -56,7 +77,8 @@ def match_linkedin_jobs_for_agent(
     loaded, so they must not be included in the tool input.
 
     The returned JSON contains ``ranked_jobs``. Every ranked job includes:
-    ``skills_score`` (cosine similarity), ``experience_score``,
+    ``skills_score`` (required-skill coverage after exact/ESCO/cosine matching),
+    ``experience_score``,
     ``education_score``, and the weighted ``final_score`` calculated as:
 
         skills_score * 0.5
@@ -64,7 +86,10 @@ def match_linkedin_jobs_for_agent(
         + education_score * 0.2
 
     Jobs are already sorted by ``final_score`` descending. Do not recalculate
-    or reorder the scores in the agent response.
+    or reorder the scores in the agent response. ESCO normalization counts are
+    dataset-coverage statistics, never candidate-job match counts. A 100 score
+    with a ``No ... requirement stated`` note means no penalty was applied; it
+    is not evidence that an unstated requirement was positively matched.
     """
 
     if _current_cv_info is None:
@@ -104,6 +129,7 @@ def match_linkedin_jobs_for_agent(
         )
 
     _last_match_result = result
+    sync_linkedin_results_for_shared_tools(result)
 
     # Full descriptions are retained in module state for the cover-letter
     # stage, but excluded from the LLM observation to save context tokens.

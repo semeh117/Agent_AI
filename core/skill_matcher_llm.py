@@ -14,9 +14,19 @@ skill that isn't in either list, it can only judge equivalence between
 things that are already real.
 """
 
+import logging
 from typing import List
 from pydantic import BaseModel, Field
-from config import get_llm
+from config import get_parser_llm
+
+
+logger = logging.getLogger(__name__)
+
+# Long structured arrays are the most common cause of truncated/malformed JSON
+# from smaller free models. Ten decisions fit comfortably inside the configured
+# completion budget while keeping the number of calls reasonable.
+SKILLS_PER_CALL = 10
+MAX_PARSE_ATTEMPTS = 2
 
 
 class SkillMatch(BaseModel):
@@ -31,18 +41,18 @@ class SkillMatchResult(BaseModel):
 
 def match_skills_llm(cv_skills: List[str], job_skills: List[str], llm=None) -> SkillMatchResult:
     if llm is None:
-        llm = get_llm(temperature=0.0)
+        llm = get_parser_llm(temperature=0.0)
     structured_llm = llm.with_structured_output(SkillMatchResult)
 
-    prompt = f"""You are an expert technical skills-matching evaluator. Determine
+    prompt_template = """You are an expert technical skills-matching evaluator. Determine
 whether a candidate's skills satisfy EACH required skill in a job
 posting.
 
 CANDIDATE SKILLS:
-{", ".join(cv_skills)}
+{candidate_skills}
 
 JOB REQUIRED SKILLS:
-{", ".join(job_skills)}
+{job_skills}
 
 Evaluate EVERY job-required skill independently. For each one, decide
 if the candidate satisfies it through:
@@ -100,6 +110,58 @@ do not count the same candidate skill as evidence for unrelated
 requirements; require a genuine technical relationship for indirect
 matches; prefer matched=False when the relationship is ambiguous or
 debatable; never invent candidate skills; never infer knowledge solely
-from job title, seniority, or industry."""
+from job title, seniority, or industry.
 
-    return structured_llm.invoke(prompt)
+Return exactly one decision for every required skill in the supplied
+order. Keep matched_via short."""
+
+    combined_matches: List[SkillMatch] = []
+    for start in range(0, len(job_skills), SKILLS_PER_CALL):
+        chunk = job_skills[start:start + SKILLS_PER_CALL]
+        prompt = prompt_template.format(
+            candidate_skills=", ".join(cv_skills),
+            job_skills=", ".join(chunk),
+        )
+
+        parsed = None
+        last_error = None
+        for attempt in range(1, MAX_PARSE_ATTEMPTS + 1):
+            try:
+                parsed = structured_llm.invoke(prompt)
+                break
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Skill matching JSON failed for chunk %s-%s (attempt %s/%s): %s",
+                    start + 1,
+                    start + len(chunk),
+                    attempt,
+                    MAX_PARSE_ATTEMPTS,
+                    exc,
+                )
+
+        # Preserve the original required-skill spelling/order and never let an
+        # omitted, duplicated, or malformed model item disappear from scoring.
+        # If both attempts fail, the conservative result is "missing", not a
+        # crashed end-to-end workflow or an invented match.
+        returned_by_name = {}
+        if parsed is not None:
+            for match in parsed.matches:
+                returned_by_name.setdefault(match.job_skill.strip().casefold(), match)
+        elif last_error is not None:
+            logger.error(
+                "Skill matching chunk failed after retries; marking %s requirement(s) missing.",
+                len(chunk),
+            )
+
+        for required_skill in chunk:
+            returned = returned_by_name.get(required_skill.strip().casefold())
+            combined_matches.append(
+                SkillMatch(
+                    job_skill=required_skill,
+                    matched=bool(returned and returned.matched),
+                    matched_via=(returned.matched_via if returned and returned.matched else ""),
+                )
+            )
+
+    return SkillMatchResult(matches=combined_matches)
