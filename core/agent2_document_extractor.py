@@ -16,6 +16,10 @@ from pathlib import Path
 import re
 import unicodedata
 
+from pydantic import BaseModel, Field
+
+from core.extraction_cache import get_cached, set_cached
+
 
 _KNOWN_CV_SECTIONS = (
     "professional summary",
@@ -47,6 +51,49 @@ class Agent2Document:
     extraction_version: str
     detected_sections: tuple[str, ...]
     warnings: tuple[str, ...] = ()
+
+
+class _CachedAgent2Document(BaseModel):
+    """Serializable extraction payload stored independently from its path."""
+
+    markdown: str
+    plain_text: str
+    pypdf_text: str
+    backend: str
+    content_hash: str
+    extraction_version: str
+    detected_sections: list[str]
+    warnings: list[str] = Field(default_factory=list)
+
+
+def _document_from_cache(
+    cached: _CachedAgent2Document,
+    source_path: Path,
+) -> Agent2Document:
+    return Agent2Document(
+        markdown=cached.markdown,
+        plain_text=cached.plain_text,
+        pypdf_text=cached.pypdf_text,
+        backend=cached.backend,
+        source_path=str(source_path),
+        content_hash=cached.content_hash,
+        extraction_version=cached.extraction_version,
+        detected_sections=tuple(cached.detected_sections),
+        warnings=tuple(cached.warnings),
+    )
+
+
+def _document_for_cache(document: Agent2Document) -> _CachedAgent2Document:
+    return _CachedAgent2Document(
+        markdown=document.markdown,
+        plain_text=document.plain_text,
+        pypdf_text=document.pypdf_text,
+        backend=document.backend,
+        content_hash=document.content_hash,
+        extraction_version=document.extraction_version,
+        detected_sections=list(document.detected_sections),
+        warnings=list(document.warnings),
+    )
 
 
 def _normalize_text(value: str) -> str:
@@ -153,7 +200,11 @@ def _extract_pypdf_text(source_path: Path) -> str:
     )
 
 
-def extract_cv_document_agent2(pdf_source: str | Path) -> Agent2Document:
+def extract_cv_document_agent2(
+    pdf_source: str | Path,
+    *,
+    use_cache: bool = True,
+) -> Agent2Document:
     """Extract complementary Docling and PyPDF views of one local CV."""
 
     source_path = Path(pdf_source).expanduser().resolve()
@@ -161,6 +212,25 @@ def extract_cv_document_agent2(pdf_source: str | Path) -> Agent2Document:
         raise FileNotFoundError(f"CV PDF does not exist: {source_path}")
     if source_path.suffix.casefold() != ".pdf":
         raise ValueError(f"Agent 2 document extraction expects a PDF: {source_path}")
+
+    content_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    cache_identity = f"{EXTRACTION_VERSION}:{content_hash}"
+    if use_cache:
+        cached = get_cached(
+            "agent2_document",
+            cache_identity,
+            _CachedAgent2Document,
+        )
+        if (
+            cached is not None
+            and cached.content_hash == content_hash
+            and cached.extraction_version == EXTRACTION_VERSION
+        ):
+            print(
+                "  [CACHE HIT] Agent 2 document already extracted — "
+                "Docling and RapidOCR skipped."
+            )
+            return _document_from_cache(cached, source_path)
 
     converter = _get_docling_converter()
     result = converter.convert(source_path)
@@ -188,14 +258,17 @@ def extract_cv_document_agent2(pdf_source: str | Path) -> Agent2Document:
             f"PyPDF extracted unusually short text ({len(pypdf_text)} characters)."
         )
 
-    return Agent2Document(
+    document = Agent2Document(
         markdown=markdown,
         plain_text=plain_text,
         pypdf_text=pypdf_text,
         backend="docling+pypdf",
         source_path=str(source_path),
-        content_hash=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        content_hash=content_hash,
         extraction_version=EXTRACTION_VERSION,
         detected_sections=sections,
         warnings=tuple(warnings),
     )
+    if use_cache:
+        set_cached("agent2_document", cache_identity, _document_for_cache(document))
+    return document

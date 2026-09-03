@@ -7,7 +7,6 @@ directly starts the real CV -> LinkedIn -> cover letter -> delivery workflow.
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import sys
 
@@ -74,7 +73,11 @@ def _inject_workflow_fakes(monkeypatch):
     import pipeline.send_results_email as email_pipeline
     import pipeline.send_results_telegram as telegram_pipeline
 
-    monkeypatch.setattr(agent2_workflow, "get_agent_llm", lambda **_kwargs: _FakeAgentLLM())
+    monkeypatch.setattr(
+        agent2_workflow,
+        "get_agent_llm",
+        lambda **_kwargs: _FakeAgentLLM(),
+    )
     monkeypatch.setattr(agent2_workflow, "match_linkedin_jobs", _fake_ranked_result)
     monkeypatch.setattr(
         cover_letter_pipeline,

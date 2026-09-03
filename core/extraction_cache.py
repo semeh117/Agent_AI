@@ -24,11 +24,13 @@ get tangled together.
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Optional, TypeVar
 from pydantic import BaseModel
 
-CACHE_DIR = Path("cache")
+CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -65,7 +67,22 @@ def set_cached(namespace: str, text: str, result: BaseModel) -> None:
     key = _hash_key(text)
     path = _cache_path(namespace, key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    temporary_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{key}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(result.model_dump_json(indent=2))
+            temporary_path = Path(temporary_file.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def clear_cache(namespace: Optional[str] = None) -> int:

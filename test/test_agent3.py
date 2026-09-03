@@ -1,4 +1,4 @@
-"""Interactive end-to-end test for the preserved LinkedIn Agent 3."""
+"""Interactive end-to-end test for the new LinkedIn Agent 3."""
 
 import os
 import sys
@@ -46,6 +46,10 @@ cv_info = result["cv_info"]
 print(
     f"\nCandidate: {cv_info.full_name}, "
     f"{len(cv_info.skills)} skills, "
-    f"{cv_info.experience_years} years of experience\n"
+    f"{cv_info.experience_years} years of experience, "
+    f"education={cv_info.highest_education_level or 'not found'}\n"
 )
+print(f"CV extraction: {result['cv_extraction_backend']}\n")
+for warning in result.get("cv_extraction_warnings", []):
+    print(f"CV extraction warning: {warning}")
 print(result["output"])

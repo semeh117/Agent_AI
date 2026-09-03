@@ -134,7 +134,10 @@ def _load_cv_node(state: Agent2State) -> Agent2State:
         from core.agent2_document_extractor import extract_cv_document_agent2
         from core.agent2_parser import extract_cv_info_agent2
 
-        document = extract_cv_document_agent2(pdf_source)
+        document = extract_cv_document_agent2(
+            pdf_source,
+            use_cache=bool(state.get("use_cache", True)),
+        )
         cv_info = extract_cv_info_agent2(
             document.pypdf_text,
             layout_text=document.markdown,
@@ -481,24 +484,26 @@ def _normalize_channel(value: Optional[str]) -> str:
     return channel
 
 
-def _interrupt_payload(result: dict[str, Any]) -> Optional[dict[str, Any]]:
-    interruptions = result.get("__interrupt__") or ()
-    if not interruptions:
-        return None
-    first = interruptions[0]
-    value = getattr(first, "value", first)
-    return value if isinstance(value, dict) else {"question": str(value)}
-
-
-def _checkpoint_interrupt_payload(
-    config: dict[str, Any],
+def _interrupt_payload(
+    result: dict[str, Any],
+    config: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Read interrupts stored outside state by LangGraph 0.2.x ``invoke``."""
+    interruptions = result.get("__interrupt__") or ()
+    if interruptions:
+        first = interruptions[0]
+        value = getattr(first, "value", first)
+        return value if isinstance(value, dict) else {"question": str(value)}
 
-    snapshot = _get_agent2_graph().get_state(config)
-    for task in getattr(snapshot, "tasks", ()):
-        for pending in getattr(task, "interrupts", ()):
-            value = getattr(pending, "value", pending)
+    # Some LangGraph versions keep interrupts only on the checkpoint task
+    # instead of including ``__interrupt__`` in ``invoke()``'s state result.
+    if config is not None:
+        snapshot = _get_agent2_graph().get_state(config)
+        for task in getattr(snapshot, "tasks", ()):
+            task_interrupts = getattr(task, "interrupts", ())
+            if not task_interrupts:
+                continue
+            first = task_interrupts[0]
+            value = getattr(first, "value", first)
             return value if isinstance(value, dict) else {"question": str(value)}
     return None
 
@@ -519,13 +524,13 @@ def _ask_delivery_cli(payload: Optional[dict[str, Any]]) -> str:
 def _public_result(
     result: dict[str, Any],
     workflow_id: str,
-    interrupt_payload: Optional[dict[str, Any]] = None,
+    config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     public = dict(result)
     public["workflow_id"] = workflow_id
     if public.get("cv_info") and isinstance(public["cv_info"], dict):
         public["cv_info"] = _as_cv_info(public["cv_info"])
-    payload = interrupt_payload or _interrupt_payload(public)
+    payload = _interrupt_payload(public, config=config)
     if payload is not None:
         public["status"] = "awaiting_delivery"
         public["interrupt"] = payload
@@ -566,15 +571,14 @@ def _invoke_workflow(
 
     config = {"configurable": {"thread_id": resolved_id}}
     result = _get_agent2_graph().invoke(state, config=config)
-    payload = _interrupt_payload(result) or _checkpoint_interrupt_payload(config)
+    payload = _interrupt_payload(result, config=config)
     if payload is not None and interactive_delivery:
         choice = _ask_delivery_cli(payload)
         result = _get_agent2_graph().invoke(
             Command(resume=choice),
             config=config,
         )
-        payload = _interrupt_payload(result) or _checkpoint_interrupt_payload(config)
-    return _public_result(result, resolved_id, payload)
+    return _public_result(result, resolved_id, config=config)
 
 
 def run_agent2_full_auto(
@@ -636,8 +640,7 @@ def resume_agent2_workflow(
         Command(resume=channel),
         config=config,
     )
-    payload = _interrupt_payload(result) or _checkpoint_interrupt_payload(config)
-    return _public_result(result, resolved_id, payload)
+    return _public_result(result, resolved_id, config=config)
 
 
 # Natural Agent 2 entry point retained for existing callers.
