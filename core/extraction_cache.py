@@ -1,10 +1,8 @@
-# core/extraction_cache.py
-"""
-extraction_cache.py
---------------
-Content-addressed cache for expensive LLM extraction calls (CV parsing,
-job requirement parsing). Keyed by a hash of the EXACT input text, not
-by filename or job title, so:
+"""Content-addressed cache for expensive extraction and parsing calls.
+
+The cache is used for CV document extraction, CV parsing, and job requirement
+parsing. It is keyed by exact input content rather than a filename or title.
+This means:
 
 - The same CV file parsed twice (even across separate runs) reuses the
   cached result instead of re-calling the LLM.
@@ -100,6 +98,8 @@ def clear_cache(namespace: Optional[str] = None) -> int:
     count = sum(1 for _ in target.rglob("*.json"))
     shutil.rmtree(target)
     return count
+
+
 def cache_stats() -> dict:
     """Quick visibility into what's cached — counts entries per namespace."""
     if not CACHE_DIR.exists():

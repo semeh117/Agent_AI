@@ -1,8 +1,8 @@
-"""Centralized model configuration.
+"""Centralized factories for chat and embedding models.
 
-``get_llm`` remains available for backwards compatibility. Both agents use the
-dedicated orchestration factory, while extraction and cover-letter writing use
-their own role-specific factories.
+``get_llm`` remains for the legacy Agent 1 pipeline. Parser, query/tool
+orchestration, cover-letter, and embedding workloads use role-specific
+factories so changing one model does not silently change every workflow.
 """
 import os
 from dotenv import load_dotenv
@@ -128,7 +128,7 @@ def get_parser_llm(temperature: float = 0.0):
 
 
 def get_agent_llm(temperature: float = 0.0):
-    """Model shared by Agent 1 and Agent 2 for tool orchestration."""
+    """Build the Agent 1/3 orchestrator and Agent 2 query-generation model."""
 
     provider = os.getenv("AGENT_PROVIDER", "openrouter").lower()
     model = os.getenv(

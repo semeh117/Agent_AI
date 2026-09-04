@@ -1,8 +1,8 @@
-"""Reusable LinkedIn parsing and cosine-ranking pipeline for Agent 2.
+"""Deterministic LinkedIn search, parsing, and ranking pipeline for Agent 2.
 
-The pipeline receives an already-parsed candidate profile. Query generation,
-scraping, job parsing, and ranking are coordinated here so the future agent
-only has to decide when to call this workflow and how to present its result.
+The LangGraph layer controls when this pipeline runs. This module performs the
+work and returns structured data; it does not choose delivery actions or
+present results to the user.
 """
 
 from __future__ import annotations

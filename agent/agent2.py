@@ -26,6 +26,19 @@ from pipeline.linkedin_cosine_pipeline import (
     match_linkedin_jobs,
 )
 
+__all__ = [
+    "Agent2State",
+    "resume_agent2_workflow",
+    "run_agent2",
+    "run_agent2_full_auto",
+    "run_agent2_full_auto_from_pdf",
+]
+
+
+# ---------------------------------------------------------------------------
+# Graph state and validation models
+# ---------------------------------------------------------------------------
+
 
 class Agent2State(TypedDict, total=False):
     """Serializable state shared by every Agent 2 graph node."""
@@ -74,6 +87,11 @@ _CHANNEL_ALIASES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# State helpers
+# ---------------------------------------------------------------------------
+
+
 def _as_cv_info(value: Any) -> Agent2CVInfo:
     if isinstance(value, Agent2CVInfo):
         return value
@@ -110,6 +128,11 @@ def _clean_query(value: str) -> str:
     )
     text = " ".join(text.strip(" `\"'").split())
     return text[:180].strip()
+
+
+# ---------------------------------------------------------------------------
+# Workflow nodes
+# ---------------------------------------------------------------------------
 
 
 def _load_cv_node(state: Agent2State) -> Agent2State:
@@ -430,6 +453,11 @@ def _route_after_matching(state: Agent2State) -> str:
     return "cover_letter"
 
 
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
+
+
 def _build_agent2_graph():
     builder = StateGraph(Agent2State)
     builder.add_node("load_cv", _load_cv_node)
@@ -473,6 +501,11 @@ _AGENT2_CHECKPOINTER = MemorySaver()
 @lru_cache(maxsize=1)
 def _get_agent2_graph():
     return _build_agent2_graph()
+
+
+# ---------------------------------------------------------------------------
+# Public workflow runtime
+# ---------------------------------------------------------------------------
 
 
 def _normalize_channel(value: Optional[str]) -> str:

@@ -1,19 +1,9 @@
 
-"""
-cover_letter.py
---------------
-Generates a cover letter for a candidate's single best-matched job.
+"""Generate one grounded cover letter for Agent 2's top-ranked job.
 
-Takes the TOP item from job_matching_pipeline.py's run_job_matching()
-output directly — that list is already sorted descending by score, so
-"the best match" is always just results[0]. No parsing, no digging
-through agent reasoning traces; see the project's dev notes on why the
-deterministic pipeline's output was chosen over parsing the ReAct
-agent's intermediate_steps for this.
-
-This is a plain, standalone LLM call — not part of any agent tool loop —
-called once, after ranking is already finished, targeting only the #1
-job.
+This module is a standalone LLM operation. LangGraph selects the deterministic
+top result before calling it, so the writer cannot change the ranking or choose
+a different job.
 """
 
 from config import get_cover_letter_llm
