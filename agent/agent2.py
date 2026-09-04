@@ -14,7 +14,6 @@ import re
 from typing import Any, Optional, TypedDict
 from uuid import uuid4
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
@@ -25,6 +24,7 @@ from pipeline.linkedin_cosine_pipeline import (
     build_linkedin_query,
     match_linkedin_jobs,
 )
+from storage.agent2_checkpointer import Agent2SqliteSaver
 
 __all__ = [
     "Agent2State",
@@ -58,6 +58,8 @@ class Agent2State(TypedDict, total=False):
     cover_letter_job: dict[str, Any]
     delivery_channel: str
     delivery: dict[str, Any]
+    candidate_id: str
+    tracked_applications: list[dict[str, Any]]
     cv_extraction_backend: str
     cv_extraction_warnings: list[str]
     completed_steps: list[str]
@@ -245,6 +247,8 @@ def _match_jobs_node(state: Agent2State) -> Agent2State:
             location=str(state.get("location") or ""),
             max_jobs=int(state.get("results_count", 3)),
             use_cache=bool(state.get("use_cache", True)),
+            posted_within_hours=24,
+            exclude_previously_tracked=True,
         )
         ranked_jobs = list(result.get("ranked_jobs", []))
         return {
@@ -259,6 +263,52 @@ def _match_jobs_node(state: Agent2State) -> Agent2State:
         return _failure(state, "linkedin_matching", exc)
 
 
+def _persist_recommendations_node(state: Agent2State) -> Agent2State:
+    """Store ranked recommendations for the future application dashboard."""
+
+    try:
+        from services.application_tracker import save_application
+
+        candidate = _as_cv_info(state["cv_info"])
+        candidate_id: Optional[str] = None
+        tracked: list[dict[str, Any]] = []
+        for job in state.get("ranked_jobs", []):
+            record = save_application(
+                candidate,
+                job,
+                status="discovered",
+                candidate_id=candidate_id,
+            )
+            candidate_id = record.candidate_id
+            tracked.append(
+                {
+                    "application_id": record.application_id,
+                    "job_id": record.job_id,
+                    "url": record.url,
+                }
+            )
+        return {
+            "candidate_id": candidate_id or "",
+            "tracked_applications": tracked,
+            "status": "recommendations_saved",
+            "error": None,
+            "completed_steps": _steps(state, "recommendations_saved"),
+        }
+    except Exception as exc:
+        # Tracking must not discard otherwise valid recommendations.
+        return {
+            "tracked_applications": [],
+            "warnings": _warnings(
+                state,
+                "Ranked jobs could not be saved to the application tracker "
+                f"({type(exc).__name__}: {exc}).",
+            ),
+            "status": "recommendations_not_saved",
+            "error": None,
+            "completed_steps": _steps(state, "recommendations_persistence_failed"),
+        }
+
+
 def _cover_letter_node(state: Agent2State) -> Agent2State:
     """Generate exactly one letter for the deterministic top-ranked job."""
 
@@ -269,8 +319,27 @@ def _cover_letter_node(state: Agent2State) -> Agent2State:
         cover_letter = generate_cover_letter(_as_cv_info(state["cv_info"]), top_job)
         if not str(cover_letter or "").strip():
             raise ValueError("The cover-letter model returned empty content.")
+        cover_letter = str(cover_letter).strip()
+        warnings = state.get("warnings", [])
+        if state.get("candidate_id"):
+            try:
+                from services.application_tracker import save_application
+
+                save_application(
+                    _as_cv_info(state["cv_info"]),
+                    top_job,
+                    status="discovered",
+                    cover_letter=cover_letter,
+                    candidate_id=state["candidate_id"],
+                )
+            except Exception as exc:
+                warnings = _warnings(
+                    state,
+                    "The cover letter was generated but could not be stored "
+                    f"in the application tracker ({type(exc).__name__}: {exc}).",
+                )
         return {
-            "cover_letter": str(cover_letter).strip(),
+            "cover_letter": cover_letter,
             "cover_letter_job": {
                 "job_title": top_job.get("job_title", ""),
                 "company": top_job.get("company", ""),
@@ -279,6 +348,7 @@ def _cover_letter_node(state: Agent2State) -> Agent2State:
             },
             "status": "cover_letter_ready",
             "error": None,
+            "warnings": warnings,
             "completed_steps": _steps(state, "cover_letter_generated"),
         }
     except Exception as exc:
@@ -398,6 +468,11 @@ def _final_output(state: Agent2State) -> str:
         skipped = state.get("match_result", {}).get("skipped_count", 0)
         if skipped:
             lines.extend(["", f"Skipped jobs: {skipped}"])
+        tracked_count = len(state.get("tracked_applications", []))
+        if tracked_count:
+            lines.extend(
+                ["", f"Saved {tracked_count} recommendation(s) to the application tracker."]
+            )
     else:
         lines.append("Agent 2 produced no ranked LinkedIn jobs.")
 
@@ -458,11 +533,12 @@ def _route_after_matching(state: Agent2State) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_agent2_graph():
+def _build_agent2_graph(checkpointer=None):
     builder = StateGraph(Agent2State)
     builder.add_node("load_cv", _load_cv_node)
     builder.add_node("build_query", _build_query_node)
     builder.add_node("match_jobs", _match_jobs_node)
+    builder.add_node("persist_recommendations", _persist_recommendations_node)
     builder.add_node("generate_cover_letter", _cover_letter_node)
     builder.add_node("choose_delivery", _delivery_choice_node)
     builder.add_node("deliver", _delivery_node)
@@ -482,8 +558,9 @@ def _build_agent2_graph():
     builder.add_conditional_edges(
         "match_jobs",
         _route_after_matching,
-        {"cover_letter": "generate_cover_letter", "finalize": "finalize"},
+        {"cover_letter": "persist_recommendations", "finalize": "finalize"},
     )
+    builder.add_edge("persist_recommendations", "generate_cover_letter")
     builder.add_conditional_edges(
         "generate_cover_letter",
         _route_standard,
@@ -492,10 +569,7 @@ def _build_agent2_graph():
     builder.add_edge("choose_delivery", "deliver")
     builder.add_edge("deliver", "finalize")
     builder.add_edge("finalize", END)
-    return builder.compile(checkpointer=_AGENT2_CHECKPOINTER)
-
-
-_AGENT2_CHECKPOINTER = MemorySaver()
+    return builder.compile(checkpointer=checkpointer or Agent2SqliteSaver())
 
 
 @lru_cache(maxsize=1)

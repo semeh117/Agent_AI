@@ -7,6 +7,7 @@ present results to the user.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Optional
 
 from core.cosine_matcher import rank_jobs_by_cosine
@@ -15,26 +16,26 @@ from core.cosine_matcher import rank_jobs_by_cosine
 def _deduplicate_scraped_jobs(
     jobs: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Keep one recommendation per normalized title/company pair."""
+    """Keep one job per canonical LinkedIn URL/job identifier."""
 
     unique: list[dict[str, Any]] = []
     duplicates: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for job in jobs:
-        title = " ".join(str(job.get("title") or "").casefold().split())
-        company = " ".join(str(job.get("company") or "").casefold().split())
-        identity = (title, company)
-        if title and company and identity in seen:
+        url = str(job.get("url") or "").strip().split("?", 1)[0].rstrip("/")
+        match = re.search(r"/jobs/view/(?:[^/?#]*-)?(\d+)$", url)
+        identity = f"linkedin:{match.group(1)}" if match else url.casefold()
+        if identity and identity in seen:
             duplicates.append(
                 {
                     "title": str(job.get("title") or ""),
                     "company": str(job.get("company") or ""),
                     "url": str(job.get("url") or ""),
-                    "reason": "Duplicate title/company listing omitted.",
+                    "reason": "Duplicate LinkedIn job URL/identifier omitted.",
                 }
             )
             continue
-        if title and company:
+        if identity:
             seen.add(identity)
         unique.append(job)
     return unique, duplicates
@@ -78,6 +79,8 @@ def match_linkedin_jobs(
     search_fn: Optional[Callable[..., list[dict[str, Any]]]] = None,
     parser_fn: Optional[Callable[..., Any]] = None,
     embeddings: Optional[Any] = None,
+    posted_within_hours: Optional[int] = None,
+    exclude_previously_tracked: bool = False,
 ) -> dict[str, Any]:
     """Scrape, parse, and rank LinkedIn jobs for one candidate.
 
@@ -107,16 +110,25 @@ def match_linkedin_jobs(
 
     # Collect a small reserve so duplicate LinkedIn listings do not consume
     # all requested recommendation slots.
+    excluded_urls: set[str] = set()
+    if exclude_previously_tracked:
+        from services.application_tracker import get_tracked_job_urls
+
+        excluded_urls = get_tracked_job_urls(cv_info)
+
     search_limit = min(50, max_jobs + 2)
     raw_scraped_jobs = search_fn(
         query=resolved_query,
         location=resolved_location,
         max_jobs=search_limit,
+        posted_within_hours=posted_within_hours,
+        exclude_urls=excluded_urls,
     )
     scraped_jobs, duplicate_jobs = _deduplicate_scraped_jobs(raw_scraped_jobs)
 
     parsed_jobs: list[tuple[dict[str, Any], Any]] = []
     skipped_jobs: list[dict[str, str]] = list(duplicate_jobs)
+    identity_corrections: list[dict[str, str]] = []
 
     for job in scraped_jobs:
         title = str(job.get("title") or "").strip()
@@ -151,6 +163,28 @@ def match_linkedin_jobs(
             )
             continue
 
+        # LinkedIn occasionally exposes the company name in both visible
+        # identity fields. The requirement parser reads the full description
+        # and can recover a grounded role title, as observed for Mind Maze.
+        company = str(job.get("company") or "").strip()
+        parsed_title = str(getattr(requirements, "job_title", None) or "").strip()
+        if (
+            title
+            and company
+            and title.casefold() == company.casefold()
+            and parsed_title
+            and parsed_title.casefold() != company.casefold()
+        ):
+            identity_corrections.append(
+                {
+                    "url": str(job.get("url") or ""),
+                    "original_title": title,
+                    "corrected_title": parsed_title,
+                    "reason": "Page heading matched company; parser title used.",
+                }
+            )
+            job = {**job, "title": parsed_title}
+
         parsed_jobs.append((job, requirements))
         if len(parsed_jobs) >= max_jobs:
             break
@@ -168,6 +202,8 @@ def match_linkedin_jobs(
         "scraped_count": len(raw_scraped_jobs),
         "unique_scraped_count": len(scraped_jobs),
         "duplicate_count": len(duplicate_jobs),
+        "previously_tracked_count": len(excluded_urls),
+        "identity_corrections": identity_corrections,
         "parsed_count": len(parsed_jobs),
         "skipped_count": len(skipped_jobs),
         "skipped_jobs": skipped_jobs,

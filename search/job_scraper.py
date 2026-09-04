@@ -113,7 +113,11 @@ def _get_text_from_selectors(driver, selectors) -> str:
     return ""
 
 
-def _build_search_url(query: str, location: str = "") -> str:
+def _build_search_url(
+    query: str,
+    location: str = "",
+    posted_within_hours: Optional[int] = None,
+) -> str:
     """
     Build a LinkedIn public jobs search URL.
 
@@ -124,20 +128,22 @@ def _build_search_url(query: str, location: str = "") -> str:
     -> LinkedIn jobs search URL
     """
 
-    query = quote_plus(query.strip())
-
+    parameters = [f"keywords={quote_plus(query.strip())}"]
     if location:
-        location = quote_plus(location.strip())
+        parameters.append(f"location={quote_plus(location.strip())}")
+    if posted_within_hours is not None:
+        if posted_within_hours <= 0:
+            raise ValueError("posted_within_hours must be greater than zero.")
+        parameters.append(f"f_TPR=r{int(posted_within_hours) * 3600}")
+    return "https://www.linkedin.com/jobs/search/?" + "&".join(parameters)
 
-        return (
-            "https://www.linkedin.com/jobs/search/"
-            f"?keywords={query}&location={location}"
-        )
 
-    return (
-        "https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}"
-    )
+def _job_url_identity(url: str) -> str:
+    """Normalize locale/tracking variants to one LinkedIn job identity."""
+
+    clean = str(url or "").split("?", 1)[0].rstrip("/")
+    match = re.search(r"/jobs/view/(?:[^/?#]*-)?(\d+)$", clean)
+    return f"linkedin:{match.group(1)}" if match else clean.casefold()
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +154,9 @@ def _collect_job_urls(
     driver,
     query: str,
     location: str,
-    max_jobs: int
+    max_jobs: int,
+    posted_within_hours: Optional[int] = None,
+    exclude_urls: Optional[set[str]] = None,
 ) -> list[str]:
     """
     Search LinkedIn and collect unique job URLs.
@@ -157,7 +165,7 @@ def _collect_job_urls(
     It does NOT scrape the full job descriptions yet.
     """
 
-    search_url = _build_search_url(query, location)
+    search_url = _build_search_url(query, location, posted_within_hours)
 
     logger.info("Opening LinkedIn search:")
     logger.info(search_url)
@@ -166,7 +174,12 @@ def _collect_job_urls(
 
     time.sleep(PAGE_LOAD_DELAY)
 
-    job_urls = set()
+    job_urls: list[str] = []
+    seen_urls: set[str] = set()
+    excluded_urls = {
+        _job_url_identity(url)
+        for url in (exclude_urls or set())
+    }
 
     no_new_url_rounds = 0
 
@@ -198,7 +211,13 @@ def _collect_job_urls(
                     if "/jobs/view/" not in href:
                         continue
 
-                    job_urls.add(href)
+                    href = href.rstrip("/")
+                    identity = _job_url_identity(href)
+                    if identity in excluded_urls or identity in seen_urls:
+                        continue
+
+                    seen_urls.add(identity)
+                    job_urls.append(href)
 
                     if len(job_urls) >= max_jobs:
                         break
@@ -299,7 +318,7 @@ def _collect_job_urls(
             )
             break
 
-    return list(job_urls)[:max_jobs]
+    return job_urls[:max_jobs]
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +737,9 @@ def _scrape_job_page(driver, url: str) -> dict:
 def search_jobs(
     query: str,
     location: str = "",
-    max_jobs: int = DEFAULT_MAX_JOBS
+    max_jobs: int = DEFAULT_MAX_JOBS,
+    posted_within_hours: Optional[int] = None,
+    exclude_urls: Optional[set[str]] = None,
 ) -> list[dict]:
     """
     Search LinkedIn and return standardized job postings.
@@ -768,6 +789,8 @@ def search_jobs(
         raise ValueError("max_jobs must be greater than 0.")
 
     max_jobs = min(max_jobs, 50)
+    if posted_within_hours is not None and posted_within_hours <= 0:
+        raise ValueError("posted_within_hours must be greater than zero.")
 
     driver = None
 
@@ -794,7 +817,9 @@ def search_jobs(
             driver=driver,
             query=query,
             location=location,
-            max_jobs=max_jobs
+            max_jobs=max_jobs,
+            posted_within_hours=posted_within_hours,
+            exclude_urls=exclude_urls,
         )
 
         logger.info(

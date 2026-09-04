@@ -17,6 +17,7 @@ from core.cosine_matcher import (
 )
 from core.esco_normalizer import get_esco_normalizer
 from pipeline.linkedin_cosine_pipeline import match_linkedin_jobs
+from search.job_scraper import _build_search_url, _job_url_identity
 
 
 def calculate_compatibility_cosine(*args, **kwargs):
@@ -499,12 +500,12 @@ def test_oversized_alternative_group_is_ignored():
     assert result == original
 
 
-def test_linkedin_pipeline_omits_duplicate_title_company_listings():
+def test_linkedin_pipeline_deduplicates_by_job_id_not_title_company():
     scraped = [
-        {"title": "AI Engineer", "company": "Example", "url": "u1", "description": "d1"},
-        {"title": "AI Engineer", "company": "Example", "url": "u2", "description": "d2"},
-        {"title": "ML Engineer", "company": "Other", "url": "u3", "description": "d3"},
-        {"title": "Data Engineer", "company": "Third", "url": "u4", "description": "d4"},
+        {"title": "AI Engineer", "company": "Example", "url": "https://linkedin.com/jobs/view/ai-engineer-123", "description": "d1"},
+        {"title": "Wrong heading", "company": "Example", "url": "https://linkedin.com/jobs/view/other-slug-123?trk=x", "description": "d2"},
+        {"title": "AI Engineer", "company": "Example", "url": "https://linkedin.com/jobs/view/ai-engineer-124", "description": "d3"},
+        {"title": "Data Engineer", "company": "Third", "url": "https://linkedin.com/jobs/view/data-engineer-125", "description": "d4"},
     ]
     requested_limits = []
 
@@ -528,7 +529,53 @@ def test_linkedin_pipeline_omits_duplicate_title_company_listings():
     assert result["unique_scraped_count"] == 3
     assert result["duplicate_count"] == 1
     assert result["parsed_count"] == 3
-    assert [job["url"] for job in result["ranked_jobs"]] == ["u1", "u3", "u4"]
+    assert [job["url"] for job in result["ranked_jobs"]] == [
+        "https://linkedin.com/jobs/view/ai-engineer-123",
+        "https://linkedin.com/jobs/view/ai-engineer-124",
+        "https://linkedin.com/jobs/view/data-engineer-125",
+    ]
+
+
+def test_linkedin_search_url_can_request_last_24_hours():
+    url = _build_search_url(
+        "AI Engineer Python",
+        "Germany",
+        posted_within_hours=24,
+    )
+    assert "keywords=AI+Engineer+Python" in url
+    assert "location=Germany" in url
+    assert "f_TPR=r86400" in url
+    assert _job_url_identity(
+        "https://de.linkedin.com/jobs/view/role-12345?tracking=x"
+    ) == _job_url_identity(
+        "https://www.linkedin.com/jobs/view/different-slug-12345"
+    )
+
+
+def test_linkedin_pipeline_corrects_company_as_title_from_parser():
+    def fake_search(**_kwargs):
+        return [
+            {
+                "title": "Mind Maze",
+                "company": "Mind Maze",
+                "url": "https://linkedin.com/jobs/view/role-999",
+                "description": "A complete role description.",
+            }
+        ]
+
+    def fake_parser(**_kwargs):
+        return requirements(job_title="AI Engineer", required_skills=["Python"])
+
+    result = match_linkedin_jobs(
+        candidate(skills=["Python"]),
+        query="AI Engineer",
+        max_jobs=1,
+        search_fn=fake_search,
+        parser_fn=fake_parser,
+    )
+
+    assert result["ranked_jobs"][0]["job_title"] == "AI Engineer"
+    assert result["identity_corrections"][0]["original_title"] == "Mind Maze"
 
 
 if __name__ == "__main__":

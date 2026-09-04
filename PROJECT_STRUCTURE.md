@@ -33,8 +33,14 @@ stage/
 ├── search/
 │   ├── job_search.py              Himalayas search
 │   └── job_scraper.py             LinkedIn browser scraper
+├── storage/
+│   ├── agent2_database.py         Dedicated Agent 2 SQLite schema/connections
+│   └── agent2_checkpointer.py     Persistent Agent 2 LangGraph pause/resume
+├── services/
+│   └── application_tracker.py     Agent 2 application business rules
 ├── data/
 │   └── skills_en.csv              Local ESCO skills vocabulary
+├── runtime/                        Ignored Agent 2 runtime databases
 ├── fixtures/                      Reviewed parser inputs and outputs
 ├── test/                          Agent, parser, scraper, and matcher tests
 ├── dev/                           Fixture capture, calibration, and benchmarks

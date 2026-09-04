@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import tempfile
+from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -18,11 +20,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
+from langgraph.types import Command
 
 load_dotenv()
 
 import agent.agent2 as agent2_workflow
 from core.agent2_cv_parser import Agent2CVInfo
+from storage.agent2_checkpointer import Agent2SqliteSaver
 
 
 def _fake_cv() -> Agent2CVInfo:
@@ -72,6 +76,7 @@ def _inject_workflow_fakes(monkeypatch):
     import pipeline.cover_letter as cover_letter_pipeline
     import pipeline.send_results_email as email_pipeline
     import pipeline.send_results_telegram as telegram_pipeline
+    import services.application_tracker as tracker_service
 
     monkeypatch.setattr(
         agent2_workflow,
@@ -94,6 +99,16 @@ def _inject_workflow_fakes(monkeypatch):
         "create_results_telegram",
         lambda *_args, **_kwargs: {"messages": [{"ok": True}]},
     )
+    monkeypatch.setattr(
+        tracker_service,
+        "save_application",
+        lambda _candidate, job, **_kwargs: SimpleNamespace(
+            application_id="application-test-1",
+            candidate_id="candidate-test-1",
+            job_id="job-test-1",
+            url=job["url"],
+        ),
+    )
 
 
 def test_agent2_langgraph_has_explicit_nodes():
@@ -102,6 +117,7 @@ def test_agent2_langgraph_has_explicit_nodes():
         "load_cv",
         "build_query",
         "match_jobs",
+        "persist_recommendations",
         "generate_cover_letter",
         "choose_delivery",
         "deliver",
@@ -125,6 +141,7 @@ def test_agent2_langgraph_completes_with_supplied_channel(monkeypatch):
         "cv_parsed",
         "query_built",
         "jobs_ranked",
+        "recommendations_saved",
         "cover_letter_generated",
         "delivery_selected",
         "results_delivered",
@@ -154,6 +171,45 @@ def test_agent2_langgraph_pauses_and_resumes_for_streamlit(monkeypatch):
     }
 
 
+def test_agent2_langgraph_resumes_after_graph_restart(monkeypatch):
+    """A new graph object can resume a pause persisted by an older one."""
+
+    _inject_workflow_fakes(monkeypatch)
+    workflow_id = "persistent-workflow-test"
+    config = {"configurable": {"thread_id": workflow_id}}
+    initial_state = {
+        "workflow_id": workflow_id,
+        "cv_info": _fake_cv().model_dump(),
+        "location": "",
+        "results_count": 1,
+        "use_cache": True,
+        "delivery_channel": "",
+        "completed_steps": [],
+        "warnings": [],
+        "error": None,
+        "status": "started",
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "agent2.sqlite3"
+        first_graph = agent2_workflow._build_agent2_graph(
+            Agent2SqliteSaver(database_path)
+        )
+        first_graph.invoke(initial_state, config=config)
+        assert any(
+            getattr(task, "interrupts", ())
+            for task in first_graph.get_state(config).tasks
+        )
+
+        # Rebuild both saver and graph to simulate a Streamlit/app restart.
+        second_graph = agent2_workflow._build_agent2_graph(
+            Agent2SqliteSaver(database_path)
+        )
+        resumed = second_graph.invoke(Command(resume="telegram"), config=config)
+        assert resumed["status"] == "completed"
+        assert resumed["delivery"]["channel"] == "telegram"
+
+
 class _ManualMonkeyPatch:
     """Tiny pytest-free patch helper used only by ``--offline``."""
 
@@ -167,7 +223,8 @@ def _run_offline_tests() -> int:
     test_agent2_langgraph_has_explicit_nodes()
     test_agent2_langgraph_completes_with_supplied_channel(patcher)
     test_agent2_langgraph_pauses_and_resumes_for_streamlit(patcher)
-    print("Agent 2 LangGraph offline tests: PASS (3/3)")
+    test_agent2_langgraph_resumes_after_graph_restart(patcher)
+    print("Agent 2 LangGraph offline tests: PASS (4/4)")
     return 0
 
 
