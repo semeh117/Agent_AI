@@ -58,9 +58,15 @@ def build_linkedin_query(cv_info: Any, max_skills: int = 3) -> str:
         if str(skill).strip()
     ]
 
+    # A student or career changer may hold no professional title yet; the CV
+    # headline ("AI & Machine Learning Engineer") then states the target role.
+    headline = str(getattr(cv_info, "headline", "") or "").strip()
+
     terms: list[str] = []
     if titles:
         terms.append(titles[0])
+    elif headline:
+        terms.append(headline)
     terms.extend(skills[:max_skills])
 
     if not terms:

@@ -188,6 +188,9 @@ def _build_query_node(state: Agent2State) -> Agent2State:
         cv_info = _as_cv_info(state["cv_info"])
         fallback = build_linkedin_query(cv_info, max_skills=3)
         title = cv_info.job_titles[0] if cv_info.job_titles else "Not specified"
+        headline = str(getattr(cv_info, "headline", "") or "").strip()
+        if headline:
+            title = f"{title} (CV headline / target role: {headline})"
         prompt = (
             "Build one concise LinkedIn job-search query for this candidate. "
             "Use one realistic target title supported by the CV and at most "

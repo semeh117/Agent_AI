@@ -14,6 +14,7 @@ from core.agent2_parser import (
     _looks_like_contextual_cv_skill,
     _required_alternative_groups,
 )
+from dev.replay_parser_fixtures import replay_cv, replay_jobs
 from search.job_scraper import _clean_text
 
 
@@ -263,6 +264,186 @@ Senior AI Engineer
     assert "retrieval-augmented generation" in parsed.skills
 
 
+# ---------------------------------------------------------------------------
+# Deterministic-layer regression tests replayed on the captured fixtures.
+# The fixtures hold the live Qwen output; replaying it through the cleaning,
+# region, grouping, experience and education rules proves each documented
+# parsing defect stays fixed without any OpenRouter call.
+# ---------------------------------------------------------------------------
+
+
+def _replayed_jobs_by_company() -> dict[str, dict]:
+    jobs = replay_jobs()
+    by_company: dict[str, dict] = {}
+    for job in jobs:
+        assert "error" not in job, job
+        by_company.setdefault(job["company"], job)
+    return by_company
+
+
+def test_replayed_cv_removes_project_features_and_duplicates():
+    cv = replay_cv()
+    skills = cv["skills"]
+    lowered = {skill.casefold() for skill in skills}
+
+    # Project/UI features and deployment adjectives are not skills.
+    for feature in (
+        "multi-select wardrobe with FilterChips",
+        "occasion picker",
+        "outfit rating system",
+        "health checks",
+        "environment isolation",
+        "dark",
+        "ChromaDB vector store (K=4)",
+        "128-channel band-pass/notch filtering",
+        "LR",
+    ):
+        assert feature.casefold() not in lowered, feature
+
+    # Slash compounds and proficiency tags are normalized to atomic names.
+    assert "SHAP" in skills and "LIME" in skills and "SHAP/LIME" not in skills
+    assert "Git" in skills and "GitHub" in skills and "Git/GitHub" not in skills
+    assert "MLflow" in skills and "MLflow (familiar)" not in skills
+
+    # "<technology> <usage noun>" collapses onto the technology itself.
+    assert "PyMuPDF" in skills and "PyMuPDF ingestion" not in skills
+    assert "all-MiniLM-L6-v2" in skills and "all-MiniLM-L6-v2 embeddings" not in skills
+
+    # Real technical methods and names from project prose are kept.
+    for kept in (
+        "Python", "LangChain", "RAG pipelines", "FAISS", "Docker", "FastAPI",
+        "ICA artifact removal", "Logistic Regression", "Random Forest", "MFCC",
+        "Gemini Vision API", "DeepEval", "Langfuse", "gRPC", "Kafka 4.x",
+    ):
+        assert kept in skills, kept
+    assert len(skills) == len({s.casefold() for s in skills})
+
+
+def test_replayed_cv_reports_honest_education_titles_and_headline():
+    cv = replay_cv()
+    # A 4th-year engineering cycle "graduating 2026 (expected)" has not
+    # conferred an engineering (Master-level) diploma yet.
+    assert cv["highest_education_level"] == "Bachelor"
+    # Only the dated internship counts as professional experience (2 months).
+    assert cv["experience_years"] == 0.17
+    # The headline is a target role, and "Summer Internship" is an employment
+    # type, so neither is a position held.
+    assert cv["job_titles"] == []
+    assert cv["headline"] == "AI & Machine Learning Engineer"
+
+    from core.agent2_cv_parser import Agent2CVInfo
+    from pipeline.linkedin_cosine_pipeline import build_linkedin_query
+
+    query = build_linkedin_query(Agent2CVInfo.model_validate(cv), max_skills=2)
+    assert query.startswith("AI & Machine Learning Engineer")
+
+
+def test_engineering_programme_education_rules():
+    from core.agent2_cv_parser import _deterministic_education_level
+
+    assert _deterministic_education_level(
+        "Ecole X - Engineering Cycle, Data Science\n2022 - 2026 (expected)"
+    ) == "Bachelor"
+    assert _deterministic_education_level(
+        "Diplôme d'Ingénieur en Informatique, ENSI, 2018 - 2021"
+    ) == "Master"
+    assert _deterministic_education_level(
+        "Engineering Degree in Computer Science (2015-2018)\nM.Sc. Data Science 2019"
+    ) == "Master"
+    assert _deterministic_education_level("B.Sc. Computer Science 2020") == "Bachelor"
+    assert _deterministic_education_level("Team summary and plans") is None
+
+
+def test_replayed_jobs_exclude_responsibility_duties_from_requirements():
+    jobs = _replayed_jobs_by_company()
+
+    hcl = jobs["HCLTech"]
+    # HCL has no "Requirements" heading; "Level of Education" now anchors the
+    # qualifications paragraph, so duties are no longer scored as skills.
+    assert "testing" not in hcl["required_skills"]
+    assert "Python" in hcl["required_skills"]
+    assert "LangChain" in hcl["required_skills"]
+    assert hcl["required_experience_years"] is None
+    assert hcl["required_education_level"] == "Bachelor"
+
+    tcs = jobs["Tata Consultancy Services"]
+    # "Participate in hands-on technical evaluation, code reviews" is a duty.
+    assert "hands-on technical evaluation" not in tcs["required_skills"]
+    assert tcs["required_experience_years"] == 5.0  # overall minimum, not 1.5
+
+    epri = jobs["EPRI"]
+    for duty in (
+        "telemetry",
+        "quality analysis",
+        "domain adaptation for EPRI\u2019s technical language",
+        "Knowledge Graphs",  # named only in the role summary
+    ):
+        assert duty not in epri["required_skills"], duty
+    assert "Kubernetes" in epri["required_skills"]
+    assert epri["required_experience_years"] == 7.0
+    # Unbalanced brackets copied from "(FAISS, Weaviate, Pinecone)" are gone.
+    assert "FAISS" in epri["preferred_skills"] and "Pinecone" in epri["preferred_skills"]
+    assert not any("(" in s or ")" in s for s in epri["preferred_skills"])
+
+    tr = jobs["Thomson Reuters"]
+    assert tr["required_experience_years"] == 3.0  # 6+ years is preferred only
+    assert "PyTorch" in tr["preferred_skills"] and "PyTorch" not in tr["required_skills"]
+
+
+def test_replayed_jobs_keep_alternative_groups_local():
+    jobs = _replayed_jobs_by_company()
+
+    def groups(company: str) -> list[list[str]]:
+        return jobs[company]["required_skill_groups"]
+
+    # Thomson Reuters: "such as RAG patterns, ReAct, LangChain etc for
+    # performing document summarization, knowledge graphs, information
+    # extraction, or analysis" -> the examples stop at "etc for"; the tasks
+    # after it are separate requirements, not alternatives.
+    tr_groups = groups("Thomson Reuters")
+    assert ["Generative AI technologies", "RAG patterns", "ReAct", "LangChain"] in tr_groups
+    assert all("document summarization" not in g and "knowledge graphs" not in g for g in tr_groups)
+
+    # TCS: "RAG and vector search concepts including embeddings, chunking,
+    # ..., and disambiguation flows" is a mandatory list, never one group.
+    tcs_groups = groups("Tata Consultancy Services")
+    assert all("embeddings" not in g and "chunking" not in g for g in tcs_groups)
+    assert ["LangChain", "LangGraph", "LlamaIndex", "function calling", "custom orchestration"] in tcs_groups
+    assert ["AWS", "GCP"] in tcs_groups
+
+    # HCL: "Claude" inside "Claude Code" is the same mention, and "such as
+    # GitHub Copilot, ..., or Microsoft Copilot" is exactly one group.
+    hcl_groups = groups("HCLTech")
+    assert [
+        "GitHub Copilot", "Codex", "Claude Code", "LangChain", "ADK", "ChatGPT", "Microsoft Copilot",
+    ] in hcl_groups
+    assert ["cloud platforms", "AWS", "GCP"] in hcl_groups
+    assert all(len(g) <= 8 for company in jobs for g in groups(company))
+
+
+def test_job_region_fallback_never_scores_duties():
+    from core.agent2_job_parser import _job_regions
+
+    description = (
+        "Acme is hiring. Role/Responsibilities Design and deploy LLM agents. "
+        "Evaluate Claude, GPT and Gemini. Partner with product teams. "
+        "Strong programming experience in Python and TypeScript. "
+        "Hands-on experience with LangChain or LlamaIndex. "
+        "Benefits Free lunch and Kubernetes clusters for everyone."
+    )
+    regions = _job_regions(description)
+    assert not regions.has_explicit_required_heading
+    assert "Python" in regions.required and "LangChain" in regions.required
+    assert "Evaluate Claude" not in regions.required
+    assert "Design and deploy" not in regions.required
+    assert "Kubernetes" not in regions.required
+
+    # Lowercase prose such as "the role of Generative AI Engineer" or
+    # "customer requirements" is not a heading.
+    prose = "You're a good fit for the role of AI Engineer if you meet customer requirements."
+    assert _job_regions(prose).headings == ()
+
+
 def main() -> int:
     cv_review = review_cv_fixture()
     job_reviews = review_job_fixture()
@@ -280,6 +461,13 @@ def main() -> int:
     test_linkedin_description_structure_is_preserved()
     test_agent2_hybrid_cv_metadata_rules()
     test_agent2_hybrid_parser_corrects_metadata_and_keeps_methods()
+    test_replayed_cv_removes_project_features_and_duplicates()
+    test_replayed_cv_reports_honest_education_titles_and_headline()
+    test_engineering_programme_education_rules()
+    test_replayed_jobs_exclude_responsibility_duties_from_requirements()
+    test_replayed_jobs_keep_alternative_groups_local()
+    test_job_region_fallback_never_scores_duties()
+    print("[PASS] Deterministic parser regression rules hold on the replayed fixtures.")
     suspicious = cv_review["sentence_like_skills"] or any(
         review.get("sentence_like_skills") for review in job_reviews
     )

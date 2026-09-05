@@ -13,8 +13,8 @@ from pydantic import BaseModel
 
 from config import get_parser_llm
 
-CV_CACHE_VERSION = "agent2-cv-parser-v9-hybrid"
-JOB_CACHE_VERSION = "agent2-job-parser-v12"
+CV_CACHE_VERSION = "agent2-cv-parser-v10-hybrid"
+JOB_CACHE_VERSION = "agent2-job-parser-v13"
 MAX_CV_SKILLS = 100
 MAX_JOB_SKILLS = 45
 MAX_RAW_CV_SKILLS = 200
@@ -62,6 +62,11 @@ def _ground_atomic_skills(
     seen: set[str] = set()
     for value in skills:
         skill = str(value or "").strip().strip("-•,;:. ")
+        # Models copying from "(FAISS, Weaviate, Pinecone)" leak the brackets
+        # onto the first and last items. Strip unbalanced ones only; a
+        # balanced trailing qualifier such as "Kubernetes (AKS)" is kept.
+        if skill.count("(") != skill.count(")"):
+            skill = skill.strip("()[] ").strip("-•,;:. ")
         key = _canonical_skill_key(skill)
         if not skill or not key or key in seen:
             continue
@@ -97,7 +102,7 @@ def _normalize_education(value: Optional[str]) -> Optional[str]:
         return None
     if "phd" in text or "doctor" in text:
         return "PhD"
-    if "master" in text or "Engineering degree" in text:
+    if "master" in text or "engineering degree" in text:
         return "Master"
     if "bachelor" in text:
         return "Bachelor"
