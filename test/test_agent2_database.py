@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sqlite3
 import sys
@@ -26,11 +27,17 @@ from services.application_tracker import (  # noqa: E402
     save_application,
     update_application_status,
 )
+from services.interview_preparation import (  # noqa: E402
+    generate_interview_preparation,
+    list_interview_preparations,
+)
+from pypdf import PdfReader  # noqa: E402
 
 
 EXPECTED_TABLES = {
     "schema_migrations",
     "candidates",
+    "candidate_profiles",
     "jobs",
     "applications",
     "application_status_history",
@@ -61,7 +68,7 @@ def test_agent2_database_schema() -> None:
             version = connection.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            assert version == 3
+            assert version == 4
 
 
 def test_agent2_database_constraints() -> None:
@@ -98,6 +105,11 @@ def test_agent2_application_tracker() -> None:
     candidate = {
         "full_name": "Test Candidate",
         "mail": "candidate@example.com",
+        "skills": ["Python", "LangGraph", "RAG"],
+        "job_titles": ["AI Engineer"],
+        "experience_years": 4.0,
+        "education": ["B.S. Computer Science"],
+        "highest_education_level": "Bachelor",
     }
     job = {
         "job_title": "AI Engineer",
@@ -221,6 +233,166 @@ def test_agent2_application_tracker() -> None:
         assert [event.new_status for event in timeline] == ["saved", "applied"]
 
 
+class _FakeStructuredInterview:
+    def invoke(self, _prompt):
+        def question(number: int, category: str) -> dict:
+            return {
+                "question": f"{category} interview question {number}?",
+                "why_asked": "This checks relevant role knowledge.",
+                "answer_strategy": "Explain the approach and connect it to CV evidence.",
+                "sample_answer": "I would begin with the Python project stated in my CV and explain my decisions honestly.",
+                "cv_evidence": ["Python"],
+            }
+
+        return {
+            "role_summary": (
+                "This AI Engineer role focuses on grounded production systems "
+                "and reliable Python delivery."
+            ),
+            "technical_questions": [
+                question(index, "Technical") for index in range(1, 6)
+            ],
+            "gap_questions": [
+                question(index, "Gap") for index in range(1, 3)
+            ],
+            "behavioral_questions": [
+                question(index, "Behavioral") for index in range(1, 4)
+            ],
+            "questions_to_ask": [
+                "How do you evaluate model quality?",
+                "How is the AI team organized?",
+                "What does success look like in ninety days?",
+                "How are production incidents handled?",
+            ],
+            "preparation_checklist": [
+                "Review the job description.",
+                "Prepare two project examples.",
+                "Practice concise technical explanations.",
+                "Review the missing skills honestly.",
+                "Prepare questions for the interviewer.",
+            ],
+        }
+
+
+class _FakeInterviewLLM:
+    def with_structured_output(self, _schema, **kwargs):
+        assert kwargs == {"method": "json_schema", "strict": True}
+        return _FakeStructuredInterview()
+
+
+class _FakeGroqSchemaError(Exception):
+    def __init__(self, failed_generation: dict):
+        super().__init__("Generated JSON does not match the expected schema.")
+        self.body = {
+            "error": {
+                "code": "json_validate_failed",
+                "failed_generation": json.dumps(failed_generation),
+            }
+        }
+
+
+class _FakeIncompleteStructuredInterview(_FakeStructuredInterview):
+    def invoke(self, prompt):
+        payload = super().invoke(prompt)
+        payload.pop("questions_to_ask")
+        payload.pop("preparation_checklist")
+        raise _FakeGroqSchemaError(payload)
+
+
+class _FakeIncompleteInterviewLLM:
+    def with_structured_output(self, _schema, **kwargs):
+        assert kwargs == {"method": "json_schema", "strict": True}
+        return _FakeIncompleteStructuredInterview()
+
+
+def test_agent2_interview_preparation_pdf() -> None:
+    candidate = {
+        "full_name": "Test Candidate",
+        "mail": "candidate@example.com",
+        "skills": ["Python", "LangGraph", "RAG"],
+        "skill_evidence": {"Python": "Production AI project"},
+        "job_titles": ["AI Engineer"],
+        "experience_years": 4.0,
+        "education": ["B.S. Computer Science"],
+        "highest_education_level": "Bachelor",
+    }
+    job = {
+        "job_title": "AI Engineer",
+        "company": "Example AI",
+        "url": "https://example.com/jobs/interview",
+        "description": "Build reliable AI systems with Python and LangGraph.",
+        "skills_score": 80.0,
+        "experience_score": 100.0,
+        "education_score": 100.0,
+        "final_score": 90.0,
+        "skills_detail": {
+            "matching": [{"job_skill": "Python", "matched_via": "Python"}],
+            "missing": ["Kubernetes"],
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory)
+        database_path = root / "agent2.sqlite3"
+        application = save_application(
+            candidate,
+            job,
+            database_path=database_path,
+        )
+        preparation = generate_interview_preparation(
+            application.application_id,
+            llm=_FakeInterviewLLM(),
+            output_directory=root / "pdf",
+            database_path=database_path,
+        )
+        pdf_path = Path(preparation.pdf_path)
+        assert pdf_path.exists()
+        assert pdf_path.stat().st_size > 1_000
+        reader = PdfReader(pdf_path)
+        assert len(reader.pages) >= 2
+        extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+        assert "Interview Preparation Pack" in extracted
+        assert "Technical questions" in extracted
+        assert list_interview_preparations(
+            application.application_id,
+            database_path=database_path,
+        )[0].preparation_id == preparation.preparation_id
+
+
+def test_agent2_interview_recovers_missing_trailing_lists() -> None:
+    candidate = {
+        "full_name": "Recovery Candidate",
+        "skills": ["Python", "RAG"],
+        "experience_years": 3.0,
+        "highest_education_level": "Bachelor",
+    }
+    job = {
+        "job_title": "AI Engineer",
+        "company": "Recovery AI",
+        "url": "https://example.com/jobs/recovery",
+        "description": "Build reliable AI systems.",
+        "skills_score": 70.0,
+        "experience_score": 80.0,
+        "education_score": 100.0,
+        "final_score": 79.0,
+        "skills_detail": {"matching": [], "missing": ["Kubernetes"]},
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory)
+        database_path = root / "agent2.sqlite3"
+        application = save_application(candidate, job, database_path=database_path)
+        preparation = generate_interview_preparation(
+            application.application_id,
+            llm=_FakeIncompleteInterviewLLM(),
+            output_directory=root / "pdf",
+            database_path=database_path,
+        )
+        assert len(preparation.content.questions_to_ask) == 4
+        assert len(preparation.content.preparation_checklist) == 5
+        assert Path(preparation.pdf_path).exists()
+
+
 def _show_live_tracker() -> int:
     summary = get_tracker_summary()
     print("AGENT 2 APPLICATION TRACKER")
@@ -249,6 +421,34 @@ def _show_live_tracker() -> int:
     return 0
 
 
+def _prepare_live_interview() -> int:
+    applications = list_applications()
+    if not applications:
+        raise RuntimeError("No tracked applications exist. Run Agent 2 first.")
+
+    print("SAVED APPLICATIONS")
+    for index, application in enumerate(applications, start=1):
+        print(
+            f"  {index}. {application.job_title} @ {application.company} "
+            f"({application.final_score}%)"
+        )
+    raw_choice = input("\nWhich application? (enter number): ").strip()
+    selected_index = int(raw_choice) - 1
+    if selected_index < 0 or selected_index >= len(applications):
+        raise ValueError("The selected application number is out of range.")
+
+    selected = applications[selected_index]
+    print(
+        f"\nGenerating interview preparation with Groq GPT-OSS 120B for "
+        f"{selected.job_title} @ {selected.company}..."
+    )
+    preparation = generate_interview_preparation(selected.application_id)
+    print(f"Preparation ID: {preparation.preparation_id}")
+    print(f"Model: {preparation.provider}/{preparation.model}")
+    print(f"PDF: {preparation.pdf_path}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Test or inspect Agent 2's application tracker."
@@ -258,14 +458,23 @@ def main() -> int:
         action="store_true",
         help="Read and display the real Agent 2 tracker database.",
     )
+    parser.add_argument(
+        "--prepare-live",
+        action="store_true",
+        help="Choose a tracked application and generate its real interview PDF.",
+    )
     args = parser.parse_args()
+    if args.prepare_live:
+        return _prepare_live_interview()
     if args.show_live:
         return _show_live_tracker()
 
     test_agent2_database_schema()
     test_agent2_database_constraints()
     test_agent2_application_tracker()
-    print("Agent 2 SQLite database tests: PASS (3/3)")
+    test_agent2_interview_preparation_pdf()
+    test_agent2_interview_recovers_missing_trailing_lists()
+    print("Agent 2 SQLite and interview preparation tests: PASS (5/5)")
     return 0
 
 

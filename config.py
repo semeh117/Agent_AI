@@ -77,7 +77,12 @@ def _build_llm(
             # Groq applies its TPM limit to input tokens plus the requested
             # completion budget. A 12k default therefore rejects even small
             # prompts on the 8k on-demand tier before generation starts.
-            max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "2048")),
+            max_tokens=int(
+                os.getenv(
+                    f"{role_prefix}MAX_TOKENS",
+                    os.getenv("GROQ_MAX_TOKENS", "2048"),
+                )
+            ),
             max_retries=3,
             # Groq can close an otherwise successful streamed generation with
             # "Upstream idle timeout exceeded". Bypassing LangChain streaming
@@ -147,6 +152,14 @@ def get_cover_letter_llm(temperature: float = 0.3):
         "gemini-2.5-flash-lite",
     )
     return _build_llm(provider, model, temperature, role="cover_letter")
+
+
+def get_interview_llm(temperature: float = 0.2):
+    """Model used only for structured interview-preparation generation."""
+
+    provider = os.getenv("INTERVIEW_PROVIDER", "groq").lower()
+    model = os.getenv("INTERVIEW_MODEL", "openai/gpt-oss-120b")
+    return _build_llm(provider, model, temperature, role="interview")
 
 
 def get_embeddings():

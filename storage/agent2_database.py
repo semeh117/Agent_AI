@@ -16,7 +16,7 @@ from typing import Generator, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AGENT2_DATABASE_PATH = PROJECT_ROOT / "runtime" / "agent2.sqlite3"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 AGENT2_APPLICATION_STATUSES = (
     "discovered",
@@ -53,6 +53,15 @@ CREATE TABLE IF NOT EXISTS candidates (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_email
 ON candidates(lower(email))
 WHERE email IS NOT NULL AND trim(email) <> '';
+
+CREATE TABLE IF NOT EXISTS candidate_profiles (
+    candidate_id TEXT PRIMARY KEY,
+    profile_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    ),
+    FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,

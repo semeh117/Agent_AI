@@ -140,6 +140,33 @@ def _candidate_identity(
                updated_at = excluded.updated_at""",
         (resolved_id, full_name, email, now, now),
     )
+    if isinstance(candidate, Mapping):
+        profile = dict(candidate)
+    elif hasattr(candidate, "model_dump"):
+        profile = candidate.model_dump(mode="json")
+    else:
+        profile = {
+            name: getattr(candidate, name)
+            for name in (
+                "full_name",
+                "skills",
+                "skill_evidence",
+                "job_titles",
+                "experience_years",
+                "education",
+                "highest_education_level",
+                "mail",
+            )
+            if hasattr(candidate, name)
+        }
+    connection.execute(
+        """INSERT INTO candidate_profiles(candidate_id, profile_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(candidate_id) DO UPDATE SET
+               profile_json = excluded.profile_json,
+               updated_at = excluded.updated_at""",
+        (resolved_id, json.dumps(profile, ensure_ascii=False, default=str), now),
+    )
     return resolved_id
 
 
@@ -337,6 +364,36 @@ def get_application(
     if row is None:
         raise LookupError(f"Application '{application_id}' was not found.")
     return _record(row)
+
+
+def get_candidate_profile(
+    candidate_id: str,
+    *,
+    database_path: Optional[str | Path] = None,
+) -> dict[str, Any]:
+    """Load the parsed CV profile needed for grounded interview preparation."""
+
+    resolved_id = str(candidate_id or "").strip()
+    if not resolved_id:
+        raise ValueError("candidate_id is required.")
+    initialize_agent2_database(database_path)
+    with agent2_connection(database_path) as connection:
+        row = connection.execute(
+            "SELECT profile_json FROM candidate_profiles WHERE candidate_id = ?",
+            (resolved_id,),
+        ).fetchone()
+    if row is None:
+        raise LookupError(
+            "No parsed CV profile is stored for this candidate. Run Agent 2 "
+            "once with the candidate's CV before generating interview preparation."
+        )
+    try:
+        profile = json.loads(row["profile_json"])
+    except json.JSONDecodeError as exc:
+        raise ValueError("The stored candidate profile is invalid JSON.") from exc
+    if not isinstance(profile, dict):
+        raise ValueError("The stored candidate profile must be a JSON object.")
+    return profile
 
 
 def list_applications(

@@ -10,3 +10,5 @@ cache/
 data/
 temp/
 runtime/
+output/
+tmp/
