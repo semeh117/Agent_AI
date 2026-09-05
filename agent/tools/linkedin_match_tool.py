@@ -171,6 +171,8 @@ def match_linkedin_jobs_for_agent(
             location=resolved_location,
             max_jobs=_current_results_count,
             use_cache=True,
+            posted_within_hours=30 * 24,
+            exclude_previously_tracked=True,
         )
     except Exception as exc:
         return json.dumps(

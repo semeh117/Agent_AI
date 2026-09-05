@@ -536,15 +536,15 @@ def test_linkedin_pipeline_deduplicates_by_job_id_not_title_company():
     ]
 
 
-def test_linkedin_search_url_can_request_last_24_hours():
+def test_linkedin_search_url_can_request_last_30_days():
     url = _build_search_url(
         "AI Engineer Python",
         "Germany",
-        posted_within_hours=24,
+        posted_within_hours=30 * 24,
     )
     assert "keywords=AI+Engineer+Python" in url
     assert "location=Germany" in url
-    assert "f_TPR=r86400" in url
+    assert "f_TPR=r2592000" in url
     assert _job_url_identity(
         "https://de.linkedin.com/jobs/view/role-12345?tracking=x"
     ) == _job_url_identity(

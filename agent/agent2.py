@@ -247,7 +247,7 @@ def _match_jobs_node(state: Agent2State) -> Agent2State:
             location=str(state.get("location") or ""),
             max_jobs=int(state.get("results_count", 3)),
             use_cache=bool(state.get("use_cache", True)),
-            posted_within_hours=24,
+            posted_within_hours=30 * 24,
             exclude_previously_tracked=True,
         )
         ranked_jobs = list(result.get("ranked_jobs", []))
