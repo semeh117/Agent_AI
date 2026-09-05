@@ -19,8 +19,11 @@ from services.application_tracker import (
 from services.interview_preparation import (
     InterviewPreparationContent,
     InterviewPreparationRecord,
+    generate_interview_content,
     generate_interview_preparation,
+    get_interview_model_info,
     list_interview_preparations,
+    persist_interview_preparation,
     render_interview_preparation_pdf,
 )
 
@@ -41,7 +44,10 @@ __all__ = [
     "update_application_status",
     "InterviewPreparationContent",
     "InterviewPreparationRecord",
+    "generate_interview_content",
     "generate_interview_preparation",
+    "get_interview_model_info",
     "list_interview_preparations",
+    "persist_interview_preparation",
     "render_interview_preparation_pdf",
 ]

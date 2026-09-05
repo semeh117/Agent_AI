@@ -21,6 +21,7 @@ _current_cv_info: Any = None
 _current_location = ""
 _current_results_count = 3
 _last_match_result: dict[str, Any] | None = None
+_last_tracked_applications: list[dict[str, Any]] = []
 
 
 def sync_linkedin_results_for_shared_tools(result: dict[str, Any]) -> None:
@@ -52,17 +53,67 @@ def set_candidate_profile(
     """Set the candidate and run options used by subsequent tool calls."""
 
     global _current_cv_info, _current_location, _current_results_count
-    global _last_match_result
+    global _last_match_result, _last_tracked_applications
     _current_cv_info = cv_info
     _current_location = (location or "").strip()
     _current_results_count = max(1, min(int(results_count), 20))
     _last_match_result = None
+    _last_tracked_applications = []
 
 
 def get_last_match_result() -> dict[str, Any] | None:
     """Return the full latest result, including stored job descriptions."""
 
     return _last_match_result
+
+
+def get_last_tracked_applications() -> list[dict[str, Any]]:
+    """Return the tracker rows saved for the latest ranking (may be empty)."""
+
+    return list(_last_tracked_applications)
+
+
+def persist_ranked_jobs(cv_info: Any, ranked_jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Save ranked jobs in the shared Agent 2 tracker, deterministically.
+
+    This is the same ``save_application`` call Agent 2's
+    ``persist_recommendations`` node makes, so both architectures write to one
+    database with identical deduplication. Failures are reported as a warning
+    and never discard the valid ranking.
+    """
+
+    tracked: list[dict[str, Any]] = []
+    if not ranked_jobs:
+        return {"tracked_applications": tracked, "candidate_id": ""}
+    try:
+        from services.application_tracker import save_application
+
+        candidate_id: str | None = None
+        for job in ranked_jobs:
+            record = save_application(
+                cv_info,
+                job,
+                status="discovered",
+                candidate_id=candidate_id,
+            )
+            candidate_id = record.candidate_id
+            tracked.append(
+                {
+                    "application_id": record.application_id,
+                    "job_id": record.job_id,
+                    "url": record.url,
+                }
+            )
+        return {"tracked_applications": tracked, "candidate_id": candidate_id or ""}
+    except Exception as exc:
+        return {
+            "tracked_applications": tracked,
+            "candidate_id": "",
+            "persistence_warning": (
+                "Ranked jobs could not be saved to the application tracker "
+                f"({type(exc).__name__}: {exc})."
+            ),
+        }
 
 
 @tool
@@ -86,7 +137,11 @@ def match_linkedin_jobs_for_agent(
         + education_score * 0.2
 
     Jobs are already sorted by ``final_score`` descending. Do not recalculate
-    or reorder the scores in the agent response. ESCO normalization counts are
+    or reorder the scores in the agent response. The ranked jobs are also
+    saved automatically to the application tracker; ``tracked_applications``
+    lists each saved ``application_id`` with its ``url`` and
+    ``persistence_warning`` appears only if saving failed. Do not call any
+    other tool to save them. ESCO normalization counts are
     dataset-coverage statistics, never candidate-job match counts. A 100 score
     with a ``No ... requirement stated`` note means no penalty was applied; it
     is not evidence that an unstated requirement was positively matched.
@@ -107,7 +162,7 @@ def match_linkedin_jobs_for_agent(
             ensure_ascii=False,
         )
 
-    global _last_match_result
+    global _last_match_result, _last_tracked_applications
 
     try:
         result = match_linkedin_jobs(
@@ -127,6 +182,18 @@ def match_linkedin_jobs_for_agent(
             indent=2,
             ensure_ascii=False,
         )
+
+    # Persist the ranking in the shared tracker without changing its order.
+    # This is deterministic Python, not a separate LLM-controlled tool.
+    persistence = persist_ranked_jobs(_current_cv_info, result.get("ranked_jobs", []))
+    result = {
+        **result,
+        "tracked_applications": persistence["tracked_applications"],
+        "candidate_id": persistence["candidate_id"],
+    }
+    if persistence.get("persistence_warning"):
+        result["persistence_warning"] = persistence["persistence_warning"]
+    _last_tracked_applications = persistence["tracked_applications"]
 
     _last_match_result = result
     sync_linkedin_results_for_shared_tools(result)

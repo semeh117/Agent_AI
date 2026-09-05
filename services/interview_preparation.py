@@ -363,23 +363,21 @@ def _recover_schema_failed_generation(
         return None
 
 
-def generate_interview_preparation(
-    application_id: str,
-    *,
-    llm: Any = None,
-    output_directory: Optional[str | Path] = None,
-    database_path: Optional[str | Path] = None,
-) -> InterviewPreparationRecord:
-    """Generate one grounded pack, render its PDF, and persist its metadata."""
+def get_interview_model_info() -> dict[str, str]:
+    """Return the configured interview provider/model without exposing keys."""
 
-    application = get_application(application_id, database_path=database_path)
-    profile = get_candidate_profile(
-        application.candidate_id,
-        database_path=database_path,
-    )
+    return {
+        "provider": os.getenv("INTERVIEW_PROVIDER", "groq").lower(),
+        "model": os.getenv("INTERVIEW_MODEL", "openai/gpt-oss-120b"),
+    }
+
+
+def build_interview_prompt(application: Any, profile: dict[str, Any]) -> str:
+    """Build the single grounded generation prompt shared by every caller."""
+
     matching = application.match_details.get("matching", [])
     missing = application.match_details.get("missing", [])
-    prompt = f"""You create rigorous interview preparation for one real candidate and one real job.
+    return f"""You create rigorous interview preparation for one real candidate and one real job.
 
 Return exactly the requested structured object. Ground every sample answer in the candidate profile. Never invent an employer, project, achievement, number, technology, or education detail. If the candidate lacks evidence, say so honestly and propose how they should explain their learning plan. Treat missing skills as gaps, never as possessed skills.
 
@@ -395,6 +393,21 @@ MATCH EVIDENCE:
 {json.dumps({"matching": matching, "missing": missing, "final_score": application.final_score}, ensure_ascii=False)}
 """
 
+
+def generate_interview_content(
+    application: Any,
+    profile: dict[str, Any],
+    *,
+    llm: Any = None,
+) -> InterviewPreparationContent:
+    """Run the structured interview LLM call only; no files or rows are written.
+
+    This is the step Agent 2's interview graph and Agent 3's tool both rely
+    on, so the prompt, schema enforcement, and Groq schema-recovery fallback
+    live here exactly once.
+    """
+
+    prompt = build_interview_prompt(application, profile)
     if llm is None:
         llm = get_interview_llm(temperature=0.2)
     structured_llm = llm.with_structured_output(
@@ -408,23 +421,29 @@ MATCH EVIDENCE:
         recovered = _recover_schema_failed_generation(error, application)
         if recovered is None:
             raise
-        content = recovered
-    else:
-        content = (
-            response
-            if isinstance(response, InterviewPreparationContent)
-            else InterviewPreparationContent.model_validate(response)
-        )
-
-    preparation_id = str(uuid4())
-    pdf_path = render_interview_preparation_pdf(
-        preparation_id=preparation_id,
-        application=application,
-        content=content,
-        output_directory=output_directory,
+        return recovered
+    return (
+        response
+        if isinstance(response, InterviewPreparationContent)
+        else InterviewPreparationContent.model_validate(response)
     )
-    provider = os.getenv("INTERVIEW_PROVIDER", "groq").lower()
-    model = os.getenv("INTERVIEW_MODEL", "openai/gpt-oss-120b")
+
+
+def persist_interview_preparation(
+    *,
+    preparation_id: str,
+    application_id: str,
+    content: InterviewPreparationContent,
+    pdf_path: str | Path,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    database_path: Optional[str | Path] = None,
+) -> InterviewPreparationRecord:
+    """Store one rendered preparation version and return its record."""
+
+    model_info = get_interview_model_info()
+    provider = provider or model_info["provider"]
+    model = model or model_info["model"]
     envelope = {
         "provider": provider,
         "model": model,
@@ -440,19 +459,55 @@ MATCH EVIDENCE:
                ) VALUES (?, ?, ?, ?)""",
             (
                 preparation_id,
-                application.application_id,
+                application_id,
                 json.dumps(envelope, ensure_ascii=False),
                 created_at,
             ),
         )
     return InterviewPreparationRecord(
         preparation_id=preparation_id,
-        application_id=application.application_id,
+        application_id=application_id,
         provider=provider,
         model=model,
         content=content,
         pdf_path=str(pdf_path),
         created_at=created_at,
+    )
+
+
+def generate_interview_preparation(
+    application_id: str,
+    *,
+    llm: Any = None,
+    output_directory: Optional[str | Path] = None,
+    database_path: Optional[str | Path] = None,
+) -> InterviewPreparationRecord:
+    """Generate one grounded pack, render its PDF, and persist its metadata.
+
+    Compatibility wrapper that runs the three shared steps in order. Agent 2's
+    interview graph calls the same steps as separate nodes; Agent 3's tool
+    calls this wrapper directly.
+    """
+
+    application = get_application(application_id, database_path=database_path)
+    profile = get_candidate_profile(
+        application.candidate_id,
+        database_path=database_path,
+    )
+    content = generate_interview_content(application, profile, llm=llm)
+    preparation_id = str(uuid4())
+    pdf_path = render_interview_preparation_pdf(
+        preparation_id=preparation_id,
+        application=application,
+        content=content,
+        output_directory=output_directory,
+    )
+    return persist_interview_preparation(
+        preparation_id=preparation_id,
+        application_id=application.application_id,
+        content=content,
+        pdf_path=pdf_path,
+        database_path=database_path,
     )
 
 
