@@ -58,9 +58,15 @@ def build_linkedin_query(cv_info: Any, max_skills: int = 3) -> str:
         if str(skill).strip()
     ]
 
+    # A student or career changer may hold no professional title yet; the CV
+    # headline ("AI & Machine Learning Engineer") then states the target role.
+    headline = str(getattr(cv_info, "headline", "") or "").strip()
+
     terms: list[str] = []
     if titles:
         terms.append(titles[0])
+    elif headline:
+        terms.append(headline)
     terms.extend(skills[:max_skills])
 
     if not terms:
@@ -81,6 +87,7 @@ def match_linkedin_jobs(
     embeddings: Optional[Any] = None,
     posted_within_hours: Optional[int] = None,
     exclude_previously_tracked: bool = False,
+    search_pool_size: Optional[int] = None,
 ) -> dict[str, Any]:
     """Scrape, parse, and rank LinkedIn jobs for one candidate.
 
@@ -92,6 +99,9 @@ def match_linkedin_jobs(
 
     if max_jobs <= 0:
         raise ValueError("max_jobs must be greater than zero.")
+    search_limit = search_pool_size if search_pool_size is not None else max(10, max_jobs * 3)
+    if not max_jobs <= search_limit <= 50:
+        raise ValueError("search_pool_size must be between max_jobs and 50.")
 
     resolved_query = (query or "").strip() or build_linkedin_query(cv_info)
     resolved_location = (location or "").strip()
@@ -116,7 +126,7 @@ def match_linkedin_jobs(
 
         excluded_urls = get_tracked_job_urls(cv_info)
 
-    search_limit = min(50, max_jobs + 2)
+    search_limit = min(50, search_limit)
     raw_scraped_jobs = search_fn(
         query=resolved_query,
         location=resolved_location,
@@ -130,7 +140,7 @@ def match_linkedin_jobs(
     skipped_jobs: list[dict[str, str]] = list(duplicate_jobs)
     identity_corrections: list[dict[str, str]] = []
 
-    for job in scraped_jobs:
+    for job in scraped_jobs[:search_limit]:
         title = str(job.get("title") or "").strip()
         description = str(job.get("description") or "").strip()
 
@@ -186,11 +196,9 @@ def match_linkedin_jobs(
             job = {**job, "title": parsed_title}
 
         parsed_jobs.append((job, requirements))
-        if len(parsed_jobs) >= max_jobs:
-            break
 
     ranked_jobs = (
-        rank_jobs_by_cosine(cv_info, parsed_jobs, embeddings=embeddings)
+        rank_jobs_by_cosine(cv_info, parsed_jobs, embeddings=embeddings)[:max_jobs]
         if parsed_jobs
         else []
     )
@@ -199,6 +207,7 @@ def match_linkedin_jobs(
         "query": resolved_query,
         "location": resolved_location,
         "requested_count": max_jobs,
+        "search_pool_size": search_limit,
         "scraped_count": len(raw_scraped_jobs),
         "unique_scraped_count": len(scraped_jobs),
         "duplicate_count": len(duplicate_jobs),

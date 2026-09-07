@@ -1,0 +1,7 @@
+{
+  "label_status": "Assistant-authored, provisional; requires independent domain review.",
+  "sha256": {
+    "cv_parser_fixture.json": "ce6db97aa9953cbc3f34b1d9d99c8c41df7206092adfac05713137cff7f3cfc4",
+    "linkedin_job_parser_fixture.json": "52b045cc30aec683c34d35379c751d4470277e34482e3894975db23bba772f48"
+  }
+}

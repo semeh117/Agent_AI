@@ -30,6 +30,7 @@ import time
 import re
 import json
 import logging
+import os
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -48,8 +49,9 @@ PAGE_LOAD_DELAY = 4
 SCROLL_DELAY = 1.5
 JOB_PAGE_DELAY = 3
 
-# Your current Chrome version
-CHROME_VERSION = 151
+# Leave unset to let the driver select the current stable Chrome version.
+# Override when using a managed or older Chrome installation.
+CHROME_VERSION = os.getenv("CHROME_VERSION", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -80,10 +82,22 @@ def _create_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
 
-    driver = uc.Chrome(
-        options=options,
-        version_main=CHROME_VERSION
-    )
+    kwargs = {"options": options}
+    if CHROME_VERSION:
+        if not CHROME_VERSION.isdigit():
+            raise ValueError("CHROME_VERSION must be a major version number, or empty.")
+        kwargs["version_main"] = int(CHROME_VERSION)
+    binary = os.getenv("CHROME_BINARY", "").strip()
+    if binary:
+        kwargs["browser_executable_path"] = binary
+    try:
+        driver = uc.Chrome(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            "Chrome could not start. Install Chrome, or set CHROME_BINARY and "
+            "CHROME_VERSION for your installation."
+        ) from exc
+    driver.set_page_load_timeout(45)
 
     return driver
 

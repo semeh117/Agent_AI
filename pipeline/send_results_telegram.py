@@ -23,6 +23,7 @@ Uses plain `requests` — no extra dependency added.
 """
 
 import os
+import hashlib
 
 import requests
 
@@ -69,7 +70,8 @@ def _split_long_message(text: str, limit: int = 4000) -> list[str]:
     return chunks
 
 
-def create_results_telegram(cv_info, ranked_jobs: list, cover_letter: str) -> dict:
+def create_results_telegram(cv_info, ranked_jobs: list, cover_letter: str, *,
+                            delivery_id: str | None = None, database_path=None) -> dict:
     """
     Sends the ranked matches + cover letter to the recipient's Telegram
     chat. Same ranked_jobs payload shape as create_results_draft().
@@ -87,23 +89,46 @@ def create_results_telegram(cv_info, ranked_jobs: list, cover_letter: str) -> di
 
     body = _build_email_body(cv_info, ranked_jobs, cover_letter)
     api = TELEGRAM_API.format(token=token)
+    from services.delivery_journal import claim_part, finish_part, UncertainDeliveryError
+    # Include destination and content so legacy callers also get retry protection.
+    content_hash = hashlib.sha256(f"{chat_id}\n{body}".encode()).hexdigest()
+    operation = f"telegram:{delivery_id or content_hash}"
 
     responses = []
-    for chunk in _split_long_message(body):
-        response = requests.post(
-            f"{api}/sendMessage",
-            json={"chat_id": chat_id, "text": chunk},
-            timeout=30,
-        )
-        if response.status_code != 200:
+    for index, chunk in enumerate(_split_long_message(body)):
+        receipt = claim_part(operation, index, content_hash, database_path=database_path)
+        if receipt is not None:
+            responses.append(receipt)
+            continue
+        try:
+            response = requests.post(
+                f"{api}/sendMessage",
+                json={"chat_id": chat_id, "text": chunk},
+                timeout=30,
+            )
+        except requests.RequestException:
+            # Do not expose the request URL: Telegram embeds the secret in it.
+            raise UncertainDeliveryError(
+                f"Telegram part {index + 1} has an uncertain network outcome. "
+                "Check your chat before retrying."
+            ) from None
+        try:
+            payload = response.json()
+        except ValueError:
+            raise UncertainDeliveryError("Telegram returned an unreadable response; check your chat.") from None
+        if response.status_code != 200 or not payload.get("ok"):
+            if response.status_code >= 500:
+                raise UncertainDeliveryError("Telegram reported a server error; check your chat before retrying.")
+            finish_part(operation, index, None, database_path=database_path)
             try:
-                detail = response.json()["description"]
+                detail = payload["description"]
             except Exception:
                 detail = response.text[:200]
             raise RuntimeError(
                 f"Telegram sendMessage failed (HTTP {response.status_code}): {detail}"
             )
-        responses.append(response.json())
+        finish_part(operation, index, payload, database_path=database_path)
+        responses.append(payload)
 
     print(f"Telegram message(s) sent to chat {chat_id} ({len(responses)} chunk(s)).")
     return {"chat_id": chat_id, "messages": responses}

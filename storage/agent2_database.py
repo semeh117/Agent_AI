@@ -16,7 +16,7 @@ from typing import Generator, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AGENT2_DATABASE_PATH = PROJECT_ROOT / "runtime" / "agent2.sqlite3"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 AGENT2_APPLICATION_STATUSES = (
     "discovered",
@@ -31,6 +31,15 @@ AGENT2_APPLICATION_STATUSES = (
 _STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT2_APPLICATION_STATUSES)
 
 _SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS delivery_parts (
+    operation TEXT NOT NULL,
+    part INTEGER NOT NULL,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed')),
+    receipt_json TEXT,
+    PRIMARY KEY (operation, part)
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT (

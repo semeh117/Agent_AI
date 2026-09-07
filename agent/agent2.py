@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import re
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
@@ -32,6 +32,8 @@ __all__ = [
     "run_agent2",
     "run_agent2_full_auto",
     "run_agent2_full_auto_from_pdf",
+    "get_agent2_workflow",
+    "retry_agent2_delivery",
 ]
 
 
@@ -48,6 +50,8 @@ class Agent2State(TypedDict, total=False):
     cv_info: dict[str, Any]
     location: str
     results_count: int
+    search_pool_size: int
+    requested_query: str
     use_cache: bool
     query: str
     query_source: str
@@ -186,8 +190,17 @@ def _build_query_node(state: Agent2State) -> Agent2State:
 
     try:
         cv_info = _as_cv_info(state["cv_info"])
+        if state.get("requested_query"):
+            return {
+                "query": _clean_query(state["requested_query"]),
+                "query_source": "user", "status": "query_ready", "error": None,
+                "completed_steps": _steps(state, "query_built"),
+            }
         fallback = build_linkedin_query(cv_info, max_skills=3)
         title = cv_info.job_titles[0] if cv_info.job_titles else "Not specified"
+        headline = str(getattr(cv_info, "headline", "") or "").strip()
+        if headline:
+            title = f"{title} (CV headline / target role: {headline})"
         prompt = (
             "Build one concise LinkedIn job-search query for this candidate. "
             "Use one realistic target title supported by the CV and at most "
@@ -249,6 +262,7 @@ def _match_jobs_node(state: Agent2State) -> Agent2State:
             use_cache=bool(state.get("use_cache", True)),
             posted_within_hours=30 * 24,
             exclude_previously_tracked=True,
+            search_pool_size=state.get("search_pool_size"),
         )
         ranked_jobs = list(result.get("ranked_jobs", []))
         return {
@@ -420,7 +434,9 @@ def _delivery_node(state: Agent2State) -> Agent2State:
         elif channel == "telegram":
             from pipeline.send_results_telegram import create_results_telegram
 
-            resource = create_results_telegram(cv_info, ranked_jobs, cover_letter)
+            resource = create_results_telegram(
+                cv_info, ranked_jobs, cover_letter, delivery_id=state["workflow_id"]
+            )
             delivery = {
                 "channel": "telegram",
                 "status": "completed",
@@ -654,11 +670,19 @@ def _invoke_workflow(
     delivery_channel: Optional[str] = None,
     interactive_delivery: bool = True,
     workflow_id: Optional[str] = None,
+    search_pool_size: Optional[int] = None,
+    query: str = "",
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
     if results_count <= 0:
         raise ValueError("results_count must be greater than zero.")
     if cv_info is None and not str(pdf_source or "").strip():
         raise ValueError("A CV PDF or parsed CV profile is required.")
+    results_count = min(int(results_count), 20)
+    pool = search_pool_size if search_pool_size is not None else max(10, results_count * 3)
+    pool = min(pool, 50)
+    if pool < results_count:
+        raise ValueError("The search pool must contain at least the requested number of results.")
 
     resolved_id = workflow_id or str(uuid4())
     state: Agent2State = {
@@ -666,6 +690,8 @@ def _invoke_workflow(
         "pdf_source": str(pdf_source or ""),
         "location": str(location or "").strip(),
         "results_count": min(int(results_count), 20),
+        "search_pool_size": pool,
+        "requested_query": _clean_query(query),
         "use_cache": bool(use_cache),
         "delivery_channel": _normalize_channel(delivery_channel),
         "completed_steps": [],
@@ -677,7 +703,14 @@ def _invoke_workflow(
         state["cv_info"] = _as_cv_info(cv_info).model_dump()
 
     config = {"configurable": {"thread_id": resolved_id}}
-    result = _get_agent2_graph().invoke(state, config=config)
+    if on_progress is None:
+        result = _get_agent2_graph().invoke(state, config=config)
+    else:
+        for event in _get_agent2_graph().stream(state, config=config, stream_mode="updates"):
+            for node in event:
+                if node != "__interrupt__":
+                    on_progress(node)
+        result = dict(_get_agent2_graph().get_state(config).values)
     payload = _interrupt_payload(result, config=config)
     if payload is not None and interactive_delivery:
         choice = _ask_delivery_cli(payload)
@@ -696,6 +729,9 @@ def run_agent2_full_auto(
     *,
     interactive_delivery: bool = True,
     workflow_id: Optional[str] = None,
+    search_pool_size: Optional[int] = None,
+    query: str = "",
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
     """Run Agent 2 from an existing parsed CV profile."""
 
@@ -706,6 +742,9 @@ def run_agent2_full_auto(
         delivery_channel=delivery_channel,
         interactive_delivery=interactive_delivery,
         workflow_id=workflow_id,
+        search_pool_size=search_pool_size,
+        query=query,
+        on_progress=on_progress,
     )
 
 
@@ -718,6 +757,9 @@ def run_agent2_full_auto_from_pdf(
     *,
     interactive_delivery: bool = True,
     workflow_id: Optional[str] = None,
+    search_pool_size: Optional[int] = None,
+    query: str = "",
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
     """Run the complete LangGraph workflow from one CV PDF."""
 
@@ -729,12 +771,17 @@ def run_agent2_full_auto_from_pdf(
         delivery_channel=delivery_channel,
         interactive_delivery=interactive_delivery,
         workflow_id=workflow_id,
+        search_pool_size=search_pool_size,
+        query=query,
+        on_progress=on_progress,
     )
 
 
 def resume_agent2_workflow(
     workflow_id: str,
     delivery_channel: str,
+    *,
+    cover_letter: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resume a Streamlit-paused workflow with the user's delivery choice."""
 
@@ -743,11 +790,45 @@ def resume_agent2_workflow(
         raise ValueError("workflow_id is required to resume Agent 2.")
     channel = _normalize_channel(delivery_channel)
     config = {"configurable": {"thread_id": resolved_id}}
+    existing = get_agent2_workflow(resolved_id)
+    if existing.get("status") != "awaiting_delivery":
+        raise ValueError("This workflow is not awaiting delivery approval.")
+    if cover_letter is not None:
+        letter = cover_letter.strip()
+        if not letter:
+            raise ValueError("The cover letter cannot be empty.")
+        if existing.get("candidate_id"):
+            from services.application_tracker import save_application
+            save_application(existing["cv_info"], existing["top_job"],
+                             candidate_id=existing["candidate_id"], cover_letter=letter)
+        _get_agent2_graph().update_state(config, {"cover_letter": letter})
     result = _get_agent2_graph().invoke(
         Command(resume=channel),
         config=config,
     )
     return _public_result(result, resolved_id, config=config)
+
+
+def get_agent2_workflow(workflow_id: str) -> dict[str, Any]:
+    """Restore saved results and the delivery interrupt after a UI restart."""
+    config = {"configurable": {"thread_id": str(workflow_id).strip()}}
+    snapshot = _get_agent2_graph().get_state(config)
+    if not snapshot.values:
+        raise LookupError("The workflow was not found.")
+    return _public_result(dict(snapshot.values), workflow_id, config=config)
+
+
+def retry_agent2_delivery(workflow_id: str) -> dict[str, Any]:
+    """Retry only delivery, preserving the approved content and channel."""
+    state = get_agent2_workflow(workflow_id)
+    if state.get("delivery", {}).get("status") != "failed":
+        raise ValueError("Only a failed delivery can be retried.")
+    config = {"configurable": {"thread_id": workflow_id}}
+    _get_agent2_graph().update_state(
+        config, {"error": None, "status": "delivery_selected"}, as_node="choose_delivery"
+    )
+    result = _get_agent2_graph().invoke(None, config=config)
+    return _public_result(result, workflow_id, config=config)
 
 
 # Natural Agent 2 entry point retained for existing callers.

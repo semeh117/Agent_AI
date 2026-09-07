@@ -68,6 +68,10 @@ class _JobExtraction(BaseModel):
 _VAGUE_STANDALONE_JOB_SKILLS = {
     "analysis",
     "adapting",
+    "quality analysis",
+    "technical evaluation",
+    "telemetry",
+    "testing",
     "building",
     "coding",
     "collaborating",
@@ -229,6 +233,7 @@ _SKILL_WRAPPER_PREFIXES = (
     "deep experience leveraging ",
     "hands-on experience with ",
     "hands-on work with ",
+    "hands-on ",
     "knowledge of ",
     "exposure to ",
     "public presence on ",
@@ -275,9 +280,35 @@ _JOB_SECTION_HEADINGS: tuple[tuple[str, str], ...] = (
     ("role overview", "responsibility"),
     ("job description", "responsibility"),
     ("about the role", "responsibility"),
+    ("about the position", "responsibility"),
+    ("about the job", "responsibility"),
+    ("position summary", "responsibility"),
+    ("job summary", "responsibility"),
     ("responsibilities", "responsibility"),
     ("must have technical/functional skills", "required"),
     ("must-have technical/functional skills", "required"),
+    ("must have skills", "required"),
+    ("must-have skills", "required"),
+    ("must haves", "required"),
+    ("must-haves", "required"),
+    ("required skills and experience", "required"),
+    ("required experience", "required"),
+    ("skills and experience", "required"),
+    ("technical skills", "required"),
+    ("level of education", "required"),
+    ("education and experience", "required"),
+    ("experience and skills", "required"),
+    ("skills and qualifications", "required"),
+    ("knowledge, skills and abilities", "required"),
+    ("knowledge, skills, and abilities", "required"),
+    ("what you'll bring", "required"),
+    ("what you’ll bring", "required"),
+    ("what you need", "required"),
+    ("what you have", "required"),
+    ("what we need", "required"),
+    ("what we expect", "required"),
+    ("your profile", "required"),
+    ("candidate profile", "required"),
     ("required skills & experience", "required"),
     ("skills & experience", "required"),
     ("minimum qualifications", "required"),
@@ -303,6 +334,15 @@ _JOB_SECTION_HEADINGS: tuple[tuple[str, str], ...] = (
     ("nice to have", "preferred"),
     ("nice-to-have", "preferred"),
     ("bonus qualifications", "preferred"),
+    ("bonus points", "preferred"),
+    ("bonus skills", "preferred"),
+    ("good to have", "preferred"),
+    ("good-to-have", "preferred"),
+    ("nice to haves", "preferred"),
+    ("nice-to-haves", "preferred"),
+    ("preferred experience", "preferred"),
+    ("additional qualifications", "preferred"),
+    ("it would be great if you", "preferred"),
     ("the following skills and tools are preferred, but not required", "preferred"),
     ("how we define success", "ignored"),
     ("personal attributes", "ignored"),
@@ -313,9 +353,17 @@ _JOB_SECTION_HEADINGS: tuple[tuple[str, str], ...] = (
     ("company description", "ignored"),
     ("about the company", "ignored"),
     ("about us", "ignored"),
+    ("who we are", "ignored"),
+    ("our culture", "ignored"),
+    ("why join us", "ignored"),
+    ("why you'll love working here", "ignored"),
+    ("pay and benefits", "ignored"),
+    ("pay range", "ignored"),
+    ("salary range", "ignored"),
     ("benefits", "ignored"),
     ("compensation", "ignored"),
     ("equal opportunity", "ignored"),
+    ("equal employment opportunity", "ignored"),
 )
 
 _GENERIC_SINGLE_WORD_HEADINGS = {
@@ -355,6 +403,12 @@ def _looks_non_technical_job_skill(skill: str) -> bool:
 
     key = _canonical_skill_key(skill)
     if re.match(r"^\d+(?:\.\d+)?\+?\s+years?\b", key):
+        return True
+    # "domain adaptation for EPRI's technical language": a skill qualified by
+    # a possessive or a "for <company>" tail is an employer-specific duty.
+    if re.search(r"[\w]['\u2019]s\b", str(skill)) or re.search(
+        r"\bfor\s+[A-Z][\w&.-]*\b", str(skill)
+    ):
         return True
     if key in {
         _canonical_skill_key(value) for value in _NON_TECHNICAL_JOB_SKILLS
@@ -535,6 +589,37 @@ def _clean_job_skills(
     return specific[:max_count]
 
 
+_ENUMERATION_BREAK = re.compile(
+    r"\b(?:for|to|using|with|within|via|across|including|include|includes|"
+    r"that|which|where|when|while|through|from|on|into|by|as well as|"
+    r"etc\.?|e\.g\.?|i\.e\.?|plus|preferred|required|experience|knowledge|"
+    r"skills?|ability|understanding|familiarity|proficiency|expertise)\b"
+    r"|[.;:!?()]",
+    re.IGNORECASE,
+)
+
+
+def _enumeration_end(text: str, start: int) -> int:
+    """Return where the comma/or list starting at ``start`` stops."""
+
+    match = _ENUMERATION_BREAK.search(text, start)
+    return match.start() if match else len(text)
+
+
+def _enumeration_bounds(text: str, position: int) -> tuple[int, int]:
+    """Return the bounds of the enumeration containing ``position``.
+
+    Scanning backwards stops at the same clause breaks, so the list following
+    "such as" or "using" is isolated from the capability introducing it.
+    """
+
+    end = _enumeration_end(text, position)
+    start = 0
+    for match in _ENUMERATION_BREAK.finditer(text, 0, position):
+        start = match.end()
+    return start, end
+
+
 def _required_alternative_groups(
     required_skills: list[str], required_region: str
 ) -> list[list[str]]:
@@ -584,13 +669,18 @@ def _required_alternative_groups(
                 found.append((position, position + len(skill), skill))
         found.sort(key=lambda item: (item[0], -(item[1] - item[0])))
 
+        # Longest occurrence wins at each position: "Claude" inside "Claude
+        # Code" is the same mention, not a second alternative.
         unique: list[tuple[int, int, str]] = []
         identities: set[str] = set()
+        last_end = -1
         for item in found:
             identity = _canonical_skill_key(item[2])
-            if identity and identity not in identities:
-                unique.append(item)
-                identities.add(identity)
+            if item[0] < last_end or not identity or identity in identities:
+                continue
+            unique.append(item)
+            identities.add(identity)
+            last_end = item[1]
         return unique
 
     def add_candidate(
@@ -629,17 +719,20 @@ def _required_alternative_groups(
             )
 
         # ``such as`` expresses one broad capability with named examples. Keep
-        # the closest preceding parsed capability and the local examples.
+        # the closest preceding parsed capability and only the examples that
+        # belong to the same enumeration. The enumeration ends where the
+        # sentence moves on ("etc for performing ...", "to build ...").
         for marker in re.finditer(r"\bsuch as\s+", segment, flags=re.IGNORECASE):
             preceding = [
                 skill
                 for start, _end, skill in segment_occurrences
                 if start < marker.start()
             ]
+            list_end = _enumeration_end(segment, marker.end())
             examples = [
                 skill
                 for start, _end, skill in segment_occurrences
-                if start >= marker.end()
+                if marker.end() <= start < list_end
             ]
             add_candidate(
                 ([preceding[-1]] if preceding else []) + examples,
@@ -647,13 +740,23 @@ def _required_alternative_groups(
                 source_order=source_order,
             )
 
-        # An explicit ``or`` makes the skills in that local clause alternatives.
-        # Splitting on ``, plus`` prevents a following requirement from joining
-        # the same group (AWS/Azure/GCP, plus Docker/Kubernetes).
+        # An explicit ``or`` makes the skills of that one enumeration
+        # alternatives. Only the comma/or list containing the ``or`` counts:
+        # "RAG and vector search concepts including embeddings, chunking, ...
+        # or disambiguation flows" must not turn the whole sentence into one
+        # group. Splitting on ``, plus`` prevents a following requirement from
+        # joining the same group (AWS/Azure/GCP, plus Docker/Kubernetes).
         for clause in re.split(r",\s+plus\b|\bplus\b", segment, flags=re.IGNORECASE):
-            if re.search(r"\b(?:or|and/or)\b", clause, flags=re.IGNORECASE):
+            for or_match in re.finditer(
+                r"\b(?:or|and/or)\b", clause, flags=re.IGNORECASE
+            ):
+                list_start, list_end = _enumeration_bounds(clause, or_match.start())
                 add_candidate(
-                    [skill for _start, _end, skill in occurrences(clause)],
+                    [
+                        skill
+                        for start, _end, skill in occurrences(clause)
+                        if list_start <= start < list_end
+                    ],
                     priority=3,
                     source_order=source_order,
                 )
@@ -725,18 +828,36 @@ def _has_nonoptional_occurrence(skill: str, description: str) -> bool:
     )
 
 
-def _has_explicit_requirement_occurrence(skill: str, description: str) -> bool:
-    """Require qualification wording around skills outside required sections."""
+_DUTY_SENTENCE_START = re.compile(
+    r"^\s*(?:[-•*]\s*)?(?:participate|collaborate|partner|work|write|design|"
+    r"develop|build|implement|deploy|evaluate|maintain|lead|drive|own|"
+    r"conduct|create|deliver|support|manage|define|document|contribute|"
+    r"integrate|monitor|optimi[sz]e|research|stay|mentor|coordinate|"
+    r"communicate|present|translate|ensure|help|assist)\b",
+    re.IGNORECASE,
+)
 
-    return any(
-        _REQUIREMENT_LANGUAGE.search(_sentence_around(description, position))
-        is not None
-        and not any(
-            marker in _sentence_around(description, position)
-            for marker in _OPTIONAL_MARKERS
-        )
-        for position in _skill_positions(skill, description)
-    )
+
+def _has_explicit_requirement_occurrence(skill: str, description: str) -> bool:
+    """Require qualification wording around skills outside required sections.
+
+    The wording must come from the sentence, not from the skill text itself
+    ("hands-on technical evaluation" contains "hands-on" but the sentence
+    "Participate in hands-on technical evaluation" is a duty). Sentences that
+    start with a duty verb never count as requirements.
+    """
+
+    skill_key = str(skill or "").casefold()
+    for position in _skill_positions(skill, description):
+        sentence = _sentence_around(description, position)
+        if any(marker in sentence for marker in _OPTIONAL_MARKERS):
+            continue
+        if _DUTY_SENTENCE_START.match(sentence):
+            continue
+        context = sentence.replace(skill_key, " ")
+        if _REQUIREMENT_LANGUAGE.search(context) is not None:
+            return True
+    return False
 
 
 def _deterministic_required_experience_years(required_region: str) -> Optional[float]:
@@ -776,13 +897,10 @@ def _find_job_section_headings(description: str) -> list[_SectionHeading]:
         )
         for match in pattern.finditer(description):
             # Flattened LinkedIn descriptions contain ordinary sentences such
-            # as "customer requirements" and "these benefits". A generic
-            # one-word section label must retain heading-style capitalization;
-            # longer labels remain case-insensitive for localized formatting.
-            if (
-                label in _GENERIC_SINGLE_WORD_HEADINGS
-                and not match.group(0)[:1].isupper()
-            ):
+            # as "customer requirements", "these benefits" or "the role of
+            # Generative AI Engineer". Real section headings keep heading-style
+            # capitalization, so a lowercase first letter means prose.
+            if not match.group(0)[:1].isupper():
                 continue
             candidates.append(
                 _SectionHeading(match.start(), match.end(), label, kind)
@@ -805,6 +923,40 @@ def _join_regions(parts: list[str]) -> str:
     return "\n".join(part.strip(" \t\r\n:.-") for part in parts if part.strip())
 
 
+_CANDIDATE_REQUIREMENT_SENTENCE = re.compile(
+    r"^\s*(?:[-•*]\s*)?(?:"
+    r"(?:strong|solid|proven|demonstrated|extensive|deep|advanced|excellent|"
+    r"good|hands-on|practical|working|prior|relevant|significant|expert)\b[^.]{0,40}?"
+    r"\b(?:experience|knowledge|understanding|proficiency|expertise|skills?|background)\b"
+    r"|(?:experience|proficiency|proficient|expertise|familiarity|knowledge|"
+    r"understanding|background|competen(?:ce|cy)|fluen(?:cy|t)|degree|"
+    r"bachelor|master|phd|doctorate)\b"
+    r"|\d+(?:\.\d+)?\s*\+?\s*years?\b"
+    r"|(?:must|should)\s+(?:have|be|possess)\b"
+    r"|ability\s+to\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _requirement_sentences(text: str) -> str:
+    """Keep only sentences phrased as candidate requirements, not duties.
+
+    Used when a posting has no qualifications heading. Duty sentences start
+    with an imperative verb ("Design", "Evaluate", "Partner closely"), while
+    requirement sentences start with possession wording ("Strong experience
+    in", "Proficiency with", "5+ years", "Bachelor's degree").
+    """
+
+    sentences = re.split(r"(?<=[.;!?])\s+|\r?\n+", text)
+    kept = [
+        sentence.strip()
+        for sentence in sentences
+        if sentence.strip() and _CANDIDATE_REQUIREMENT_SENTENCE.match(sentence)
+    ]
+    return " ".join(kept)
+
+
 def _job_regions(description: str) -> _JobRegions:
     """Split LinkedIn prose using every recognized heading range in source order."""
 
@@ -820,17 +972,27 @@ def _job_regions(description: str) -> _JobRegions:
         parts[heading.kind].append(description[heading.end:end])
 
     # Some postings contain no explicit qualifications heading. In that case,
-    # retain the pre-preferred/non-boilerplate body as the conservative required
-    # region rather than silently returning no requirements.
+    # retain the non-boilerplate body as the conservative required region
+    # rather than silently returning no requirements, but never include text
+    # that a heading already classified as responsibilities, preferred, or
+    # ignored: duties such as "Evaluate Claude and similar models" must not be
+    # scored as skills the candidate is required to have.
     has_explicit_required_heading = bool(parts["required"])
     if not has_explicit_required_heading:
-        stop_positions = [
-            heading.start
-            for heading in headings
-            if heading.kind in {"preferred", "ignored"}
-        ]
-        fallback_end = min(stop_positions) if stop_positions else len(description)
-        parts["required"].append(description[:fallback_end])
+        first_heading_start = headings[0].start if headings else len(description)
+        fallback_parts = [description[:first_heading_start]]
+        for index, heading in enumerate(headings):
+            if heading.kind != "responsibility":
+                continue
+            end = headings[index + 1].start if index + 1 < len(headings) else len(description)
+            # A responsibilities block that is directly followed by the end of
+            # the posting or a preferred section often hides an unlabeled
+            # qualifications paragraph at its tail. Recover only sentences
+            # that use explicit requirement wording; duties stay excluded.
+            fallback_parts.append(
+                _requirement_sentences(description[heading.end:end])
+            )
+        parts["required"].extend(part for part in fallback_parts if part.strip())
 
     return _JobRegions(
         responsibility=_join_regions(parts["responsibility"]),

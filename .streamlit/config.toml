@@ -1,0 +1,15 @@
+[server]
+address = "127.0.0.1"
+headless = true
+maxUploadSize = 10
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#16735B"
+backgroundColor = "#FAF9F6"
+secondaryBackgroundColor = "#F0EFE9"
+textColor = "#20392F"
+font = "sans serif"

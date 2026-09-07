@@ -129,7 +129,26 @@ generate_interview_preparation_pdf on request  never during the search run
 python test/test_agent2_database.py     schema, tracker, interview PDF service
 python test/test_agent2.py --offline    search graph + interview graph
 python test/test_agent3.py --offline    tool-calling loop, persistence, tool
+python test/test_parser_fixtures.py     parser rules replayed on captured fixtures
+python -m dev.replay_parser_fixtures    print what the deterministic parser
+                                        layers produce for the fixtures
 ```
+
+## Parser quality loop
+
+The Agent 2 parsers have two layers: the Qwen extraction (prompt + schema)
+and deterministic Python rules that ground, clean, classify and group what the
+model returned. Parsing defects are fixed in the deterministic layer whenever
+possible, because it is reproducible and testable offline:
+
+1. Capture evidence: `python -m dev.capture_cv_parser_fixture cv/X.pdf` and
+   `python -m dev.capture_linkedin_job_parser_fixture "<query>"`.
+2. Replay it: `python -m dev.replay_parser_fixtures` feeds the captured model
+   output back through the rules without calling OpenRouter.
+3. Fix the rule, then lock it with an assertion in
+   `test/test_parser_fixtures.py`.
+4. Bump `CV_CACHE_VERSION` / `JOB_CACHE_VERSION` in
+   `core/agent2_parser_common.py` so stale cached parses are not reused.
 
 The files under `dev/` are development utilities, not production workflow
 dependencies. Files under `test/` are import-safe: live demonstrations run only
