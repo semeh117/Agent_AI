@@ -18,6 +18,7 @@ import unicodedata
 
 from pydantic import BaseModel, Field
 
+from next_chapter.paths import CACHE_DIR
 from next_chapter.storage.extraction_cache import get_cached, set_cached
 
 
@@ -174,14 +175,32 @@ def _get_docling_converter():
 
     try:
         from docling.datamodel.base_models import InputFormat
-        from docling.document_converter import DocumentConverter
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            RapidOcrOptions,
+        )
+        from docling.document_converter import DocumentConverter, PdfFormatOption
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Docling is not installed. Install the project requirements before "
             "running Agent 2's document-extraction comparison."
         ) from exc
 
-    return DocumentConverter(allowed_formats=[InputFormat.PDF])
+    rapidocr_models = CACHE_DIR / "rapidocr"
+    rapidocr_models.mkdir(parents=True, exist_ok=True)
+    pipeline_options = PdfPipelineOptions(
+        ocr_options=RapidOcrOptions(
+            backend="torch",
+            lang=["en"],
+            rapidocr_params={"Global.model_root_dir": str(rapidocr_models)},
+        )
+    )
+    return DocumentConverter(
+        allowed_formats=[InputFormat.PDF],
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        },
+    )
 
 
 def _extract_pypdf_text(source_path: Path) -> str:
