@@ -1,0 +1,27 @@
+name: Offline checks
+on:
+  push:
+  pull_request:
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements-lock.txt
+            requirements-test.txt
+      - run: python -m pip install -r requirements-test.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - run: python -m pip check
+      - run: python -m scripts.run_checks
+      - run: python -m pip wheel --no-deps --no-build-isolation --wheel-dir output/wheels .
+      - run: python -m scripts.check_package output/wheels/next_chapter-0.1.0-py3-none-any.whl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: check-logs
+          path: output/checks

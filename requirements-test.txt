@@ -1,0 +1,18 @@
+# CI dependencies: no Docling, Torch or downloaded model required.
+-c requirements-lock.txt
+streamlit
+langchain
+langgraph
+langchain-openai
+pydantic
+python-dotenv
+pypdf
+requests
+python-docx
+reportlab
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+selenium
+undetected-chromedriver
+setuptools

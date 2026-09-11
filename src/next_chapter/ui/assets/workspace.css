@@ -1,0 +1,28 @@
+.block-container {max-width:1180px;padding-top:2rem;padding-bottom:4rem;}
+h1,h2,h3 {letter-spacing:-.035em;}
+h1 {font-weight:650!important;line-height:1.12!important;}
+[data-testid="stSidebar"] {border-right:1px solid #dedfd6;}
+[data-testid="stSidebar"] [role="radiogroup"] {gap:.5rem;}
+[data-testid="stSidebar"] [role="radiogroup"] label {padding:.65rem .8rem;border-radius:10px;}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {background:#dcebe2;}
+[data-testid="stMetric"] {padding:1rem 1.2rem;background:#fff;border:1px solid #dedfd6;border-radius:12px;}
+[data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] {border-radius:14px;}
+div.stButton > button, [data-testid="stDownloadButton"] button {border-radius:9px;min-height:2.65rem;}
+.workspace-hero {background:#173f35;color:#fbfaf5;padding:2.2rem 2.4rem;border-radius:18px;margin:.4rem 0 1.6rem;position:relative;overflow:hidden;}
+.workspace-hero::after {content:"";position:absolute;right:-60px;top:-110px;width:320px;height:320px;border:1px solid #739487;border-radius:50%;box-shadow:0 0 0 42px #ffffff06,0 0 0 84px #ffffff04;pointer-events:none;}
+.workspace-hero h1 {color:#fbfaf5!important;font-size:2.8rem!important;max-width:720px;margin:.65rem 0 1rem;position:relative;z-index:1;}
+.workspace-hero p {color:#d8e5de;max-width:650px;font-size:1.05rem;margin:0;position:relative;z-index:1;}
+.eyebrow {font-size:.73rem;letter-spacing:.16em;text-transform:uppercase;font-weight:600;}
+.journey {display:flex;gap:.65rem;margin:0 0 1.5rem;}
+.journey-step {flex:1;padding:.8rem 1rem;border-bottom:2px solid #d9ded7;color:#56665d;font-size:.85rem;}
+.journey-step.active {border-color:#16735b;color:#125d48;background:#e8f0e9;border-radius:8px 8px 0 0;font-weight:600;}
+.journey-step span {margin-right:.6rem;font-size:.75rem;opacity:.8;}
+.brand {font-size:1.45rem;font-weight:650;letter-spacing:-.04em;margin:0 0 .2rem;}
+@media (max-width:700px) {
+ .block-container {padding-top:1rem;}
+ .workspace-hero {padding:1.5rem;}
+ .workspace-hero h1 {font-size:2rem!important;}
+ .journey {gap:.25rem;}
+ .journey-step {padding:.65rem .4rem;font-size:.75rem;}
+ .journey-step span {display:block;}
+}

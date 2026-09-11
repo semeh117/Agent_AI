@@ -1,0 +1,4 @@
+conceptUri,preferredLabel,altLabels,skillType,status
+urn:test:music,manage musical staff,manage music staff,skill,active
+urn:test:one,first skill,ambiguous skill,skill,active
+urn:test:two,second skill,ambiguous skill,skill,active

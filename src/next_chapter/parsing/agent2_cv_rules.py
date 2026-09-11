@@ -1,0 +1,568 @@
+"""Deterministic rules for CV profile extraction."""
+
+from __future__ import annotations
+
+from datetime import date
+import re
+from typing import Optional
+
+from next_chapter.parsing.agent2_parser_common import (
+    MAX_CV_SKILLS,
+    MAX_RAW_CV_SKILLS,
+    _canonical_skill_key,
+    _evidence_map,
+    _ground_atomic_skills,
+    _normalize_education,
+)
+
+
+_CV_SECTION_HEADINGS = {
+    "curriculum vitae",
+    "resume",
+    "professional summary",
+    "profile summary",
+    "profile",
+    "technical skills",
+    "skills",
+    "professional experience",
+    "work experience",
+    "experience",
+    "projects",
+    "education",
+    "certifications",
+    "languages",
+}
+
+
+
+
+
+
+def _looks_like_cv_fragment(skill: str) -> bool:
+    """Reject obvious prose/metric fragments without using domain categories."""
+
+    text = str(skill or "").strip()
+    lowered = text.casefold()
+    if re.search(r"\b\d+(?:\.\d+)?%", text):
+        return True
+    if lowered.startswith(("and ", "or ")):
+        return True
+    if lowered.endswith((" deployed", " per", " late")):
+        return True
+    # A period followed by another word or a colon in the middle normally
+    # means the model joined two neighboring CV phrases into one item.
+    if re.search(r"[.!?]\s+[A-Za-z]", text) or re.search(r"\w:\s+\w", text):
+        return True
+    if re.match(r"^\d+(?:st|nd|rd|th)\s+year\b", lowered):
+        return True
+    if lowered.startswith("integrated preparatory cycle"):
+        return True
+    return False
+
+
+_CV_PROFICIENCY_TAG = re.compile(
+    r"\s*\((?:familiar|basic|beginner|intermediate|advanced|native|fluent|"
+    r"proficient|expert|working knowledge|in progress|learning)\)\s*$",
+    re.IGNORECASE,
+)
+
+
+_PROTECTED_CV_SLASHES = ("ci/cd", "tcp/ip", "i/o", "ui/ux", "and/or", "a/b")
+
+
+_CV_USAGE_SUFFIXES = (
+    "ingestion",
+    "embeddings",
+    "embedding",
+    "integration",
+    "generation",
+    "deployment",
+    "backend",
+    "frontend",
+    "vector store",
+)
+
+
+def _split_cv_skill_variants(skill: str) -> list[str]:
+    """Expand one raw item into clean atomic candidates (original first)."""
+
+    text = _CV_PROFICIENCY_TAG.sub("", str(skill or "").strip()).strip()
+    if not text:
+        return []
+    variants = [text]
+    lowered = text.casefold()
+    if (
+        text.count("/") == 1
+        and not any(marker in lowered for marker in _PROTECTED_CV_SLASHES)
+        and not re.search(r"\d\s*/\s*\d", text)
+    ):
+        left, right = (part.strip() for part in text.split("/"))
+        # "band-pass/notch filtering" is one method; only split when both
+        # sides are standalone names (start with a letter, no spaces inside
+        # the left side).
+        if left and right and " " not in left and left[:1].isalpha():
+            variants = [left, right]
+    return variants
+
+
+def _clean_cv_skills(skills: list[str], source_text: str) -> list[str]:
+    """Ground CV skills and remove unmistakable extraction fragments."""
+
+    expanded: list[str] = []
+    for skill in skills:
+        expanded.extend(_split_cv_skill_variants(skill))
+    grounded = _ground_atomic_skills(
+        expanded,
+        source_text,
+        max_count=MAX_RAW_CV_SKILLS,
+    )
+    filtered = [
+        skill
+        for skill in grounded
+        if not _looks_like_cv_fragment(skill)
+    ]
+
+    # Models commonly return both ``MLflow (familiar)`` and ``MLflow`` or
+    # ``AudioCNN (log-mel spectrograms)`` and ``AudioCNN``. Treat a trailing
+    # parenthetical as evidence/context, not a separate skill identity, and
+    # retain the shortest exact source form for clean embedding input.
+    unique: list[str] = []
+    positions: dict[str, int] = {}
+    for skill in filtered:
+        base = re.sub(r"\s*\([^()]*\)\s*$", "", skill).strip()
+        identity = _canonical_skill_key(base or skill)
+        if identity in {"rest api", "rest apis"}:
+            identity = "rest"
+        if identity not in positions:
+            positions[identity] = len(unique)
+            unique.append(skill)
+        elif len(skill) < len(unique[positions[identity]]):
+            unique[positions[identity]] = skill
+
+    # Drop "<named technology> <usage noun>" when the named technology is
+    # itself present (PyMuPDF ingestion -> PyMuPDF). The qualified phrase is
+    # evidence for the base skill, not an additional requirement to match.
+    keys = {_canonical_skill_key(skill) for skill in unique}
+    result: list[str] = []
+    for skill in unique:
+        key = _canonical_skill_key(skill)
+        words = key.split()
+        redundant = False
+        for suffix in _CV_USAGE_SUFFIXES:
+            suffix_words = suffix.split()
+            if len(words) > len(suffix_words) and words[-len(suffix_words):] == suffix_words:
+                base_key = " ".join(words[: -len(suffix_words)])
+                if base_key in keys:
+                    redundant = True
+                break
+        if not redundant:
+            result.append(skill)
+    return result[:MAX_CV_SKILLS]
+
+
+def _explicit_cv_project_stack_items(source_text: str) -> list[str]:
+    """Extract concise technologies from project stack lines separated by dots.
+
+    Docling preserves lines such as ``Python · PyTorch · Scikit-learn``. These
+    are explicit skill evidence and are more reliable than asking the LLM to
+    rediscover the same names from surrounding project prose.
+    """
+
+    items: list[str] = []
+    for line in source_text.splitlines():
+        if "·" not in line:
+            continue
+        for part in line.split("·"):
+            candidate = re.sub(
+                r"\s+(?:in progress|completed|deployed)$",
+                "",
+                part.strip(),
+                flags=re.IGNORECASE,
+            ).strip()
+            if candidate:
+                items.append(candidate)
+    return _clean_cv_skills(items, source_text)
+
+
+def _looks_like_contextual_cv_skill(skill: str) -> bool:
+    """Retain reusable technical methods while rejecting project features.
+
+    This rule is domain-independent. Product features and domain entities are
+    ordinary noun phrases; technical methods usually expose an acronym, a
+    product-like spelling, a version, or an established method suffix.
+    Explicit Skills-table and project-stack items bypass this filter.
+    """
+
+    text = str(skill or "").strip()
+    words = re.findall(r"[A-Za-z0-9]+(?:\+\+|#)?", text)
+    lowered_text = text.casefold()
+    if not words or len(words) > 6:
+        return False
+    # Prepositions join a feature to its implementation detail ("wardrobe
+    # with FilterChips", "adaptation for X"); the phrase is not one skill.
+    if re.search(r"\b(?:with|for|of|to|from|on|in|via)\b", lowered_text):
+        return False
+    # Deployment/configuration adjectives describe an artifact's state, not a
+    # reusable method ("health checks", "environment isolation", "real-time
+    # GPS weather data").
+    if re.match(r"^(?:health|environment|real[- ]time|dark|light|multi[- ]select)\b", lowered_text):
+        return False
+    # A measurement or configuration value is evidence, not a skill
+    # ("128-channel band-pass/notch filtering", "K=4", "chunk 1000").
+    if re.search(r"\b\d+(?:\.\d+)?\s*-?\s*(?:channel|fold|bit|k|kb|mb|gb|ms|hz|khz|x)\b", lowered_text):
+        return False
+    if re.search(r"[=<>]", text):
+        return False
+    # Two-letter capitals such as "LR" are ambiguous abbreviations that the
+    # model expanded from prose; the explicit Skills table decides them.
+    if len(words) == 1 and len(words[0]) <= 2:
+        return False
+    if any(any(character.isdigit() for character in word) for word in words):
+        return True
+    if any(re.search(r"[a-z][A-Z]", word) for word in words):
+        return True
+    if any(len(word) >= 3 and word.isupper() for word in words):
+        return True
+    if len(words) == 1 and words[0][:1].isupper():
+        return True
+    suffixes = (
+        "api",
+        "apis",
+        "architecture",
+        "architectures",
+        "caching",
+        "learning",
+        "network",
+        "networks",
+        "transformers",
+        "vision",
+        "analysis",
+        "calling",
+        "chaining",
+        "chunking",
+        "classification",
+        "clustering",
+        "embeddings",
+        "engineering",
+        "evaluation",
+        "extraction",
+        "filtering",
+        "fine-tuning",
+        "forest",
+        "framework",
+        "frameworks",
+        "generation",
+        "harness",
+        "harnesses",
+        "ingestion",
+        "monitoring",
+        "observability",
+        "orchestration",
+        "pipeline",
+        "pipelines",
+        "preprocessing",
+        "processing",
+        "prompting",
+        "regression",
+        "removal",
+        "reranker",
+        "routing",
+        "schema",
+        "schemas",
+        "search",
+        "segmentation",
+        "simulation",
+        "vector store",
+    )
+    lowered = text.casefold()
+    return any(lowered.endswith(suffix) for suffix in suffixes)
+
+
+def _deterministic_markdown_name(source_text: str) -> Optional[str]:
+    """Recover a candidate name from Docling's leading Markdown heading."""
+
+    for line in source_text.splitlines()[:12]:
+        match = re.match(r"^#{1,3}\s+(.+?)\s*$", line.strip())
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        key = candidate.casefold()
+        words = candidate.split()
+        if key in _CV_SECTION_HEADINGS or not 2 <= len(words) <= 6:
+            return None
+        if re.search(r"[\d@|:/]", candidate):
+            return None
+        return candidate
+    return None
+
+
+def _deterministic_plain_name(source_text: str) -> Optional[str]:
+    """Recover a name from the first plain-text column without guessing."""
+
+    for raw_line in source_text.splitlines()[:8]:
+        line = raw_line.strip().lstrip("#").strip()
+        if not line:
+            continue
+        # PDF text commonly separates the name and headline using several
+        # spaces even when both are rendered on the same visual line.
+        candidate = re.split(r"\s{2,}|\s+[|•]\s+", line, maxsplit=1)[0].strip()
+        words = candidate.split()
+        if (
+            candidate.casefold() in _CV_SECTION_HEADINGS
+            or not 2 <= len(words) <= 5
+            or re.search(r"[\d@:/]", candidate)
+            or not all(re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ.'-]+", word) for word in words)
+        ):
+            continue
+        return candidate
+    return None
+
+
+def _deterministic_education_level(source_text: str) -> Optional[str]:
+    """Map explicit degree wording to the highest normalized level."""
+
+    text = source_text.casefold()
+    patterns = (
+        ("PhD", r"\b(?:ph\.?\s*d\.?|doctor(?:ate|al)?)\b"),
+        ("Master", r"\b(?:m\.?\s*s\.?|m\.?\s*sc\.?|master(?:'s)?|mba)\b"),
+        (
+            "Bachelor",
+            r"\b(?:b\.?\s*s\.?|b\.?\s*sc\.?|b\.?\s*a\.?|bachelor(?:'s)?)\b",
+        ),
+        ("High School", r"\b(?:high school|secondary school)\b"),
+    )
+    for level, pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return level
+    return _engineering_programme_level(text)
+
+
+def _engineering_programme_level(text: str) -> Optional[str]:
+    """Normalize five-year engineering programmes without inflating them.
+
+    A completed engineering diploma (Tunisian/French ``cycle d'ingénieur``,
+    ``Diplôme d'Ingénieur``, ``Engineering Degree``) is Master-equivalent. A
+    programme that is still in progress ("expected", "student", future end
+    year) has not conferred that degree yet, so the candidate is reported at
+    the Bachelor level: honest for matching and never invents a diploma.
+    """
+
+    programme = re.search(
+        r"\b(?:engineering\s+(?:cycle|degree|diploma)|cycle\s+d['\u2019]ing[ée]nieur|"
+        r"dipl[ôo]me\s+d['\u2019]ing[ée]nieur|ing[ée]nieur\s+d['\u2019][ée]tat)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not programme:
+        return None
+    window = text[programme.start() : programme.start() + 400]
+    in_progress = re.search(
+        r"\b(?:expected|in progress|ongoing|student|candidate|currently)\b",
+        window,
+        re.IGNORECASE,
+    )
+    future_end = any(
+        int(year) > date.today().year
+        for year in re.findall(r"(?:-|–|—|to)\s*(\d{4})", window)
+    )
+    return "Bachelor" if in_progress or future_end else "Master"
+
+
+def _category_headings(skills: list[str], source_text: str) -> list[str]:
+    """Return extracted values that are actually colon-terminated headings."""
+
+    headings = []
+    for skill in skills:
+        pattern = rf"(?im)^\s*{re.escape(str(skill).strip())}\s*:"
+        if re.search(pattern, source_text):
+            headings.append(str(skill).strip())
+    return headings
+
+
+def _explicit_cv_skill_items(source_text: str) -> list[str]:
+    """Extract items from plain-text or Markdown technical-skills sections."""
+
+    match = re.search(
+        r"(?is)(?:^|\n)\s*#{0,6}\s*(?:technical\s+)?skills(?:\s*&\s*tools|\s+and\s+tools)?\s*\n(.*?)"
+        # The section ends at the next heading of any kind: a Markdown heading
+        # (project titles included), an uppercase plain-text heading, or a
+        # known section name. Stopping only at known names let project bullets
+        # such as "Features: multi-select wardrobe ..." pose as skill rows.
+        r"(?=\n\s*#{1,6}\s+\S|\n\s*[A-Z][A-Z &/-]{3,}\s*\n|"
+        r"\n\s*(?:education|work experience|professional experience|experience|"
+        r"projects|certifications|languages)\s*\n|\Z)",
+        source_text,
+    )
+    if not match:
+        return []
+    items: list[str] = []
+    for line in match.group(1).splitlines():
+        stripped = line.strip()
+        values = ""
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            category = _canonical_skill_key(cells[0]) if cells else ""
+            if category in {"language", "languages"}:
+                continue
+            if len(cells) >= 2 and not all(set(cell) <= {"-", ":"} for cell in cells):
+                values = cells[-1]
+        elif ":" in stripped and not stripped.startswith(("-", "•", "*")):
+            category, values = stripped.split(":", 1)
+            # A category label is short ("Cloud", "LLMs & RAG"); a bullet
+            # sentence with a colon is not a skills row.
+            if len(category.split()) > 4:
+                continue
+            if _canonical_skill_key(category) in {"language", "languages"}:
+                continue
+        if not values:
+            continue
+        items.extend(part.strip() for part in values.split(","))
+    return _clean_cv_skills(items, source_text)
+
+
+_MONTH_NUMBERS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+_MONTH_PATTERN = "|".join(
+    sorted(_MONTH_NUMBERS, key=len, reverse=True)
+)
+
+
+_CV_DATE_RANGE = re.compile(
+    rf"\b({_MONTH_PATTERN})\.?\s+(\d{{4}})\s*"
+    rf"(?:-|–|—|to)\s*"
+    rf"(?:(present|current)|({_MONTH_PATTERN})\.?\s+(\d{{4}}))\b",
+    re.IGNORECASE,
+)
+
+
+def _cv_headline(source_text: str) -> Optional[str]:
+    """Return the profile headline printed directly under the name, if any."""
+
+    lines = [line.strip().lstrip("#").strip() for line in source_text.splitlines()]
+    lines = [line for line in lines if line]
+    if len(lines) < 2:
+        return None
+    headline = lines[1]
+    if re.search(r"[\d@|:/]", headline) or len(headline.split()) > 8:
+        return None
+    return headline
+
+
+def _clean_cv_job_titles(
+    titles: list[str], source_text: str
+) -> list[str]:
+    """Keep positions actually held; drop the headline and section headings.
+
+    The headline ("AI & Machine Learning Engineer" under the name) states a
+    target, not a role held. An Experience entry heading such as "Summer
+    Internship - Telecom, Sidi Bouzid" is reduced to its role part; if the
+    role part is itself only an employment type ("Internship") the location
+    and employer are dropped rather than kept as a title.
+    """
+
+    headline_key = _canonical_skill_key(_cv_headline(source_text) or "")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in titles:
+        title = str(value or "").strip()
+        if not title:
+            continue
+        # "Role - Employer, City" / "Role | Employer" / "Role at Employer"
+        title = re.split(r"\s+(?:-|–|—|\||@|at)\s+", title, maxsplit=1)[0].strip()
+        title = re.sub(r",.*$", "", title).strip()
+        key = _canonical_skill_key(title)
+        if not key or key in seen or key in _CV_SECTION_HEADINGS:
+            continue
+        if headline_key and key == headline_key:
+            continue
+        # "Summer Internship" / "Freelance" describe an employment type only.
+        # Agent 2 builds its LinkedIn query from job_titles[0], so an
+        # employment type there would search for internships instead of the
+        # candidate's actual target role.
+        if re.fullmatch(
+            r"(?:summer\s+|winter\s+|final[- ]year\s+|graduate\s+)?"
+            r"(?:internship|intern|trainee|stage|stagiaire|freelance|volunteer|"
+            r"part[- ]time|full[- ]time|contract)",
+            key,
+        ):
+            continue
+        seen.add(key)
+        cleaned.append(title)
+    return cleaned[:20]
+
+
+def _cv_experience_region(source_text: str) -> str:
+    """Return the explicit work-experience section when one is identifiable."""
+
+    start_match = re.search(
+        r"(?im)^\s*#{0,6}\s*(?:professional\s+|work\s+)?experience\s*$",
+        source_text,
+    )
+    if not start_match:
+        return ""
+    tail = source_text[start_match.end():]
+    end_match = re.search(
+        r"(?im)^\s*#{0,6}\s*(?:education|technical skills|skills|projects|certifications|languages)\s*$",
+        tail,
+    )
+    return tail[: end_match.start()] if end_match else tail
+
+
+def _deterministic_experience_years(source_text: str) -> Optional[float]:
+    """Calculate inclusive, non-overlapping month ranges from Experience."""
+
+    region = _cv_experience_region(source_text)
+    if not region:
+        return None
+
+    intervals: list[tuple[int, int]] = []
+    today = date.today()
+    for match in _CV_DATE_RANGE.finditer(region):
+        start_month = _MONTH_NUMBERS[match.group(1).casefold()]
+        start_year = int(match.group(2))
+        if match.group(3):
+            end_month, end_year = today.month, today.year
+        else:
+            end_month = _MONTH_NUMBERS[match.group(4).casefold()]
+            end_year = int(match.group(5))
+        start = start_year * 12 + start_month - 1
+        end = end_year * 12 + end_month - 1
+        if end >= start:
+            intervals.append((start, end))
+
+    if not intervals:
+        return None
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    months = sum(end - start + 1 for start, end in merged)
+    return round(months / 12.0, 2)

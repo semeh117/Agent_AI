@@ -3,6 +3,7 @@ venv/
 __pycache__/
 *.pyc
 .env
+.streamlit/secrets.toml
 cv/
 credentials.json
 token.json
@@ -12,3 +13,6 @@ temp/
 runtime/
 output/
 tmp/
+build/
+dist/
+*.egg-info/
