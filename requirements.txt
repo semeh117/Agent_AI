@@ -25,4 +25,3 @@ google-api-python-client
 python-docx
 reportlab
 selenium
-undetected-chromedriver

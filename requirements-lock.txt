@@ -125,7 +125,6 @@ typer==0.26.8
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 tzdata==2026.3
-undetected-chromedriver==3.5.5
 uritemplate==4.2.0
 urllib3==2.7.0
 uvicorn==0.52.4

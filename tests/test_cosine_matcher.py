@@ -3,7 +3,7 @@
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from math import isclose
 from types import SimpleNamespace
 
@@ -18,7 +18,11 @@ from next_chapter.matching.cosine_matcher import (
 )
 from next_chapter.matching.esco_normalizer import get_esco_normalizer
 from next_chapter.pipelines.linkedin_matching import match_linkedin_jobs
-from next_chapter.search.linkedin import _build_search_url, _job_url_identity
+from next_chapter.search.linkedin import (
+    _build_search_url,
+    _create_driver,
+    _job_url_identity,
+)
 
 
 def calculate_compatibility_cosine(*args, **kwargs):
@@ -555,6 +559,32 @@ def test_linkedin_search_url_can_request_last_30_days():
     ) == _job_url_identity(
         "https://www.linkedin.com/jobs/view/different-slug-12345"
     )
+
+
+def test_streamlit_cloud_chromium_configuration():
+    """Use the system Chromium binary and matching packaged driver on Linux."""
+
+    fake_driver = Mock()
+    with (
+        patch(
+            "next_chapter.search.linkedin._resolve_executable",
+            side_effect=["/usr/bin/chromium", "/usr/bin/chromedriver"],
+        ),
+        patch(
+            "next_chapter.search.linkedin.webdriver.Chrome",
+            return_value=fake_driver,
+        ) as create,
+    ):
+        assert _create_driver() is fake_driver
+
+    options = create.call_args.kwargs["options"]
+    service = create.call_args.kwargs["service"]
+    assert options.binary_location == "/usr/bin/chromium"
+    assert service.path == "/usr/bin/chromedriver"
+    assert "--headless=new" in options.arguments
+    assert "--no-sandbox" in options.arguments
+    assert "--disable-dev-shm-usage" in options.arguments
+    fake_driver.set_page_load_timeout.assert_called_once_with(45)
 
 
 def test_linkedin_pipeline_corrects_company_as_title_from_parser():

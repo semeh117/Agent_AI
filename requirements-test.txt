@@ -14,5 +14,4 @@ google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
 selenium
-undetected-chromedriver
 setuptools

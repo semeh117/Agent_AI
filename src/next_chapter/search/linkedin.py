@@ -31,10 +31,14 @@ import re
 import json
 import logging
 import os
+from pathlib import Path
+from shutil import which
 from typing import Optional
 from urllib.parse import quote_plus
 
-import undetected_chromedriver as uc
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 
@@ -49,9 +53,16 @@ PAGE_LOAD_DELAY = 4
 SCROLL_DELAY = 1.5
 JOB_PAGE_DELAY = 3
 
-# Leave unset to let the driver select the current stable Chrome version.
-# Override when using a managed or older Chrome installation.
-CHROME_VERSION = os.getenv("CHROME_VERSION", "").strip()
+_BROWSER_CANDIDATES = (
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+)
+_DRIVER_CANDIDATES = (
+    "/usr/bin/chromedriver",
+    "/usr/lib/chromium/chromedriver",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -70,32 +81,60 @@ logger = logging.getLogger(__name__)
 # Driver
 # ---------------------------------------------------------------------------
 
+def _resolve_executable(
+    environment_name: str,
+    candidates: tuple[str, ...],
+) -> str | None:
+    """Resolve an explicit command/path, then known Linux installation paths."""
+
+    configured = os.getenv(environment_name, "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        resolved = (
+            str(configured_path)
+            if configured_path.is_file()
+            else which(configured)
+        )
+        if resolved:
+            return resolved
+        raise RuntimeError(
+            f"{environment_name} points to an executable that does not exist: "
+            f"{configured}"
+        )
+
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
 def _create_driver():
     """
     Create the Selenium Chrome driver used for LinkedIn scraping.
     """
 
-    options = uc.ChromeOptions()
+    options = Options()
 
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
 
-    kwargs = {"options": options}
-    if CHROME_VERSION:
-        if not CHROME_VERSION.isdigit():
-            raise ValueError("CHROME_VERSION must be a major version number, or empty.")
-        kwargs["version_main"] = int(CHROME_VERSION)
-    binary = os.getenv("CHROME_BINARY", "").strip()
-    if binary:
-        kwargs["browser_executable_path"] = binary
+    browser_path = _resolve_executable("CHROME_BINARY", _BROWSER_CANDIDATES)
+    if browser_path:
+        options.binary_location = browser_path
+    driver_path = _resolve_executable("CHROMEDRIVER_PATH", _DRIVER_CANDIDATES)
+    service = Service(executable_path=driver_path) if driver_path else Service()
+
     try:
-        driver = uc.Chrome(**kwargs)
+        driver = webdriver.Chrome(service=service, options=options)
     except Exception as exc:
         raise RuntimeError(
-            "Chrome could not start. Install Chrome, or set CHROME_BINARY and "
-            "CHROME_VERSION for your installation."
+            "Chrome or Chromium could not start. On Streamlit Community Cloud, "
+            "add chromium and chromium-driver to packages.txt. Locally, install "
+            "Chrome or set CHROME_BINARY and CHROMEDRIVER_PATH."
         ) from exc
     driver.set_page_load_timeout(45)
 
@@ -890,15 +929,6 @@ def search_jobs(
         if driver is not None:
             try:
                 driver.quit()
-            except Exception:
-                pass
-            # undetected_chromedriver's Chrome.__del__ calls quit() a second
-            # time when the object is garbage-collected (or at interpreter
-            # shutdown), re-killing the already-dead Chrome process and
-            # raising a noisy `OSError: [WinError 6]` on Windows. Replace it
-            # with a no-op so teardown stays a single clean quit.
-            try:
-                driver.quit = lambda: None
             except Exception:
                 pass
         driver = None

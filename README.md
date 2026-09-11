@@ -43,9 +43,10 @@ interview preparation use `GROQ_API_KEY`, and letters use `GEMINI_API_KEY`.
 API usage is charged by your configured providers. Query generation falls back
 to a deterministic query if its model fails; a user-entered query skips that call.
 
-Install Google Chrome. Leave `CHROME_VERSION` blank for driver-managed selection,
-or set the installed major version when using managed/older Chrome. Set
-`CHROME_BINARY` for a nonstandard executable. Scraping requires internet access
+Install Google Chrome for local searches. Selenium detects a standard Chrome
+installation automatically; set `CHROME_BINARY` and `CHROMEDRIVER_PATH` only for
+nonstandard executable locations. Streamlit Community Cloud installs Chromium
+and its matching driver from `packages.txt`. Scraping requires internet access
 and can fail if LinkedIn serves a login page, restriction, or changed markup.
 
 Download the embedding model once while online:

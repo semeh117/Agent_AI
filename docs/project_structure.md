@@ -8,6 +8,7 @@ stage/
 ├── app.py                         Streamlit launcher
 ├── pyproject.toml                 Package metadata and build settings
 ├── requirements*.txt              Existing runtime, lock, and CI dependencies
+├── packages.txt                   Chromium packages for Streamlit Cloud
 ├── README.md                      Setup, commands, and data handling
 ├── .streamlit/config.toml          Local server and theme
 ├── .github/workflows/checks.yml    Offline CI and wheel build
