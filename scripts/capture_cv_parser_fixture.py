@@ -64,8 +64,8 @@ def main() -> int:
         if args.cv_path is None:
             parser.error("cv_path is required unless --reparse-existing is used.")
         document = extract_cv_document_agent2(args.cv_path)
-        raw_text = document.pypdf_text
-        layout_text = document.markdown
+        raw_text = document.text
+        layout_text = document.text
         content_hash = document.content_hash
         extraction_version = document.extraction_version
         source_file = args.cv_path.name

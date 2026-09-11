@@ -1,15 +1,15 @@
 # Next Chapter architecture
 
-Next Chapter is a trusted local, single-user Streamlit workspace. Python runs
-on the user's computer; configured model providers and delivery services are
-external. Docling/PyPDF extraction, cached MiniLM embeddings, cosine scoring,
-SQLite storage, and PDF rendering execute locally.
+Next Chapter is a single-user Streamlit workspace. Python runs in the selected
+deployment environment; configured model providers and delivery services are
+external. PyPDF extraction, cached MiniLM embeddings, cosine scoring, SQLite
+storage, and PDF rendering execute in that environment.
 
 ## Workflows
 
 ```text
 app.py → next_chapter.ui.app
-  profile → hybrid PDF extraction → structured CV parsing → review
+  profile → PyPDF text extraction → structured CV parsing → review
   matches → Agent 2 LangGraph
               query → LinkedIn search → parse jobs → cosine ranking
               → save applications → cover letter → approval pause
@@ -43,7 +43,7 @@ Agent 3's interview tool invokes the shared preparation service on request.
 
 The older CV/job schemas and experience/education helpers are still shared by
 the current parsers and cosine matcher. Both parser families remain available.
-The parser facade re-exports the hybrid parsers inside the new package.
+The parser facade re-exports the Agent 2 parsers inside the package.
 
 ## Persistence and restart recovery
 
@@ -53,9 +53,10 @@ The graph stores application state as dictionaries and recreates profile
 models at its public interface. Workflow node names and IDs are preserved.
 Search IDs in the Streamlit URL can restore paused searches across restarts.
 
-`cache/` keeps content-addressed extraction and parser results. Cache versions
-and fixture contents are unchanged. Interview PDFs stay in `output/` and their
-saved paths remain valid. Credentials and `.env` stay in the workspace root.
+`cache/` keeps content-addressed extraction and parser results. The PyPDF
+extractor has its own cache version, so results from the former extractor are
+not reused. Interview PDFs stay in `output/` and their saved paths remain valid.
+Credentials and `.env` stay in the workspace root.
 
 ## Development and verification
 
@@ -73,5 +74,5 @@ workspace files, fixtures, and development tools are not packaged.
 
 Module-level state in Agent 1/3 tools, Telegram's reuse of email formatting,
 and mixed generation/rendering responsibilities in the interview service
-remain follow-up refactors. Matching rules, prompts, model choices, cache
-versions, and delivery behavior are preserved.
+remain follow-up refactors. Matching rules, prompts, model choices, and delivery
+behavior are preserved.

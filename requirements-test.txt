@@ -1,4 +1,4 @@
-# CI dependencies: no Docling, Torch or downloaded model required.
+# CI dependencies: no Torch or downloaded model required.
 -c requirements-lock.txt
 streamlit
 langchain

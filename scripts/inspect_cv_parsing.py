@@ -1,4 +1,4 @@
-"""Interactive CV parsing review for the Agent 2 hybrid pipeline.
+"""Interactive CV parsing review for the Agent 2 PyPDF pipeline.
 
 Lists the PDFs available in the ``cv/`` folder, lets the user pick one, and
 prints the document-extraction and structured-parsing results side by side.
@@ -44,15 +44,14 @@ def _choose_cv(cvs: list[Path]) -> Path:
 
 def _print_extraction(cv_path: Path, use_cache: bool) -> None:
     print("\n" + "=" * 72)
-    print("STAGE 1 - DOCUMENT EXTRACTION (Docling + PyPDF, no LLM)")
+    print("STAGE 1 - DOCUMENT EXTRACTION (PyPDF, no LLM)")
     print("=" * 72)
     document = extract_cv_document_agent2(cv_path, use_cache=use_cache)
 
     print(f"Backend: {document.backend}")
     print(f"Content SHA-256: {document.content_hash[:16]}...")
     print(f"Extraction version: {document.extraction_version}")
-    print(f"PyPDF characters: {len(document.pypdf_text)}")
-    print(f"Docling Markdown characters: {len(document.markdown)}")
+    print(f"Extracted characters: {len(document.text)}")
 
     print("\nDetected sections:")
     if document.detected_sections:
@@ -82,8 +81,7 @@ def _print_parse(cv_path: Path, use_cache: bool) -> None:
     print("=" * 72)
     document = extract_cv_document_agent2(cv_path, use_cache=True)
     cv_info = extract_cv_info_agent2(
-        document.pypdf_text,
-        layout_text=document.markdown,
+        document.text,
         cache_identity=(
             f"{document.extraction_version}:{document.content_hash}"
         ),

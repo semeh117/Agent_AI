@@ -1,5 +1,4 @@
 pypdf
-docling
 pydantic
 python-dotenv
 requests==2.32.3
@@ -15,7 +14,6 @@ langchain-huggingface==0.1.2
 langchain-google-genai==2.1.5
 
 numpy==1.26.4
-opencv-python==4.11.0.86
 sentence-transformers
 streamlit
 pandas

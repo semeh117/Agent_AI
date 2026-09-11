@@ -168,8 +168,7 @@ def _load_cv_node(state: Agent2State) -> Agent2State:
             use_cache=bool(state.get("use_cache", True)),
         )
         cv_info = extract_cv_info_agent2(
-            document.pypdf_text,
-            layout_text=document.markdown,
+            document.text,
             cache_identity=f"{document.extraction_version}:{document.content_hash}",
             use_cache=bool(state.get("use_cache", True)),
         )

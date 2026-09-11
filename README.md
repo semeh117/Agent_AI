@@ -64,8 +64,10 @@ with literal, alias, capability, and semantic matching; ESCO normalization is un
 
 ## Use the workspace
 
-1. Upload a PDF of up to 10 MB. Review and correct the extracted profile, then
-   select **Save reviewed profile**.
+1. Upload a text-based PDF of up to 10 MB. Scanned or image-only PDFs are not
+   supported; export the CV directly from Word, Google Docs, or Canva so it has
+   selectable text. Review and correct the extracted profile, then select
+   **Save reviewed profile**.
 2. Open **Job matches**. Choose a query, location, result count and search pool.
    All valid jobs in the selected pool are scored before the top results are
    selected. Small pools limit cost and runtime; a larger pool allows more comparison.
@@ -138,7 +140,6 @@ documents, or deliver results when their workflow requests it:
 .\.venv\Scripts\python.exe -m examples.run_agent2
 .\.venv\Scripts\python.exe -m examples.run_agent3
 .\.venv\Scripts\python.exe -m examples.application_tracker --show-live
-.\.venv\Scripts\python.exe -m examples.compare_document_extractors --cv cv/example.pdf
 ```
 
 `scripts/` contains inspection, fixture capture, model checks, and the offline
@@ -151,8 +152,10 @@ Reviewed inputs live in `tests/fixtures/parsers/`; benchmark output goes to
 
 `runtime/agent2.sqlite3` stores profiles, applications, workflow checkpoints and
 delivery receipts. `cache/` stores extracted/parsed content; `output/` contains
-generated files. Original temporary upload files are removed after extraction.
-CV text goes to the configured providers during parsing/generation.
+generated files. PyPDF extracts selectable CV text in the app environment; no
+OCR model is downloaded or run. Original temporary upload files are removed
+after extraction. CV text goes to the configured providers during parsing and
+generation.
 
 The app is intended for a trusted single-user local workspace: it has no account
 login or per-user access controls. Keep localhost binding for this version.

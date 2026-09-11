@@ -85,11 +85,11 @@ def extract_cv_info_agent2(
     layout_text: Optional[str] = None,
     cache_identity: Optional[str] = None,
 ) -> CVInfo:
-    """Parse one CV using sequential text plus optional Docling structure.
+    """Parse one CV using source text plus optional structured fixture text.
 
-    ``cv_text`` is the stable PyPDF view used for metadata and the LLM call.
-    ``layout_text`` is Docling Markdown used to recover structured skill lists.
-    Both inputs are grounded into one unchanged ``CVInfo`` result.
+    ``cv_text`` is used for metadata and the LLM call. ``layout_text`` remains
+    available for replaying older evaluation fixtures. Production uploads use
+    the PyPDF text for both extraction and grounding.
     """
 
     source = str(cv_text or "").strip()

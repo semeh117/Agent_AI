@@ -163,9 +163,9 @@ def _clean_cv_skills(skills: list[str], source_text: str) -> list[str]:
 def _explicit_cv_project_stack_items(source_text: str) -> list[str]:
     """Extract concise technologies from project stack lines separated by dots.
 
-    Docling preserves lines such as ``Python · PyTorch · Scikit-learn``. These
-    are explicit skill evidence and are more reliable than asking the LLM to
-    rediscover the same names from surrounding project prose.
+    PDF text can preserve lines such as ``Python · PyTorch · Scikit-learn``.
+    These are explicit evidence and are more reliable than asking the LLM to
+    rediscover the names from surrounding project prose.
     """
 
     items: list[str] = []
@@ -279,7 +279,7 @@ def _looks_like_contextual_cv_skill(skill: str) -> bool:
 
 
 def _deterministic_markdown_name(source_text: str) -> Optional[str]:
-    """Recover a candidate name from Docling's leading Markdown heading."""
+    """Recover a candidate name from a leading Markdown fixture heading."""
 
     for line in source_text.splitlines()[:12]:
         match = re.match(r"^#{1,3}\s+(.+?)\s*$", line.strip())

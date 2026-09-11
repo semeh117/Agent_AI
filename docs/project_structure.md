@@ -21,7 +21,8 @@ stage/
 │   ├── agents/                    Agent 1, 2, 3 and the interview graph
 │   │   ├── agent1_support.py      Agent 1 ReAct foundation
 │   │   └── tools/                 Agent-facing adapters
-│   ├── parsing/                   Hybrid extraction and parser schemas
+│   ├── parsing/                   PDF text extraction and parser schemas
+│   │   ├── agent2_document_extractor.py  Lightweight PyPDF extraction
 │   │   ├── agent2_cv_parser.py    CV prompt and extraction orchestration
 │   │   ├── agent2_cv_rules.py     Deterministic CV cleanup and metadata rules
 │   │   ├── agent2_job_parser.py   Job prompt and extraction orchestration
@@ -65,6 +66,7 @@ the requirements. The root `app.py` retains the `streamlit run app.py` command.
 | `fixtures/` | `tests/fixtures/parsers/` |
 | `dev/` | `scripts/` and `evaluation/` |
 
-Local databases, cache namespace/version keys, credentials, and generated-file
-locations retain their existing names. Agent numbers remain meaningful for
-comparison; shared implementations have not been deleted as legacy code.
+Local databases, credentials, and generated-file locations retain their
+existing names. The extraction cache version changed with the PyPDF backend.
+Agent numbers remain meaningful for comparison; shared implementations have
+not been deleted as legacy code.

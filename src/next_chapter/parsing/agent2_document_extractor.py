@@ -1,15 +1,12 @@
-"""Layout-aware CV document extraction used only by Agent 2.
+"""Lightweight PyPDF extraction for Agent 2 and Agent 3 CV uploads.
 
-This module deliberately stops at document extraction. It does not call an
-LLM, identify skills, normalize ESCO concepts, or calculate compatibility.
-It exposes Docling's structured view and PyPDF's sequential view so Agent 2
-can use each representation for the fields it handles most reliably.
+This module stops at local document extraction. It does not call an LLM,
+identify skills, normalize concepts, or calculate compatibility.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 import hashlib
 import html
 from pathlib import Path
@@ -18,7 +15,6 @@ import unicodedata
 
 from pydantic import BaseModel, Field
 
-from next_chapter.paths import CACHE_DIR
 from next_chapter.storage.extraction_cache import get_cached, set_cached
 
 
@@ -36,16 +32,14 @@ _KNOWN_CV_SECTIONS = (
     "languages",
 )
 
-EXTRACTION_VERSION = "agent2-hybrid-extractor-v1"
+EXTRACTION_VERSION = "agent2-pypdf-extractor-v2"
 
 
 @dataclass(frozen=True)
 class Agent2Document:
-    """Two complementary text views exported from one CV document."""
+    """Text and metadata extracted from one CV PDF."""
 
-    markdown: str
-    plain_text: str
-    pypdf_text: str
+    text: str
     backend: str
     source_path: str
     content_hash: str
@@ -57,9 +51,7 @@ class Agent2Document:
 class _CachedAgent2Document(BaseModel):
     """Serializable extraction payload stored independently from its path."""
 
-    markdown: str
-    plain_text: str
-    pypdf_text: str
+    text: str
     backend: str
     content_hash: str
     extraction_version: str
@@ -72,9 +64,7 @@ def _document_from_cache(
     source_path: Path,
 ) -> Agent2Document:
     return Agent2Document(
-        markdown=cached.markdown,
-        plain_text=cached.plain_text,
-        pypdf_text=cached.pypdf_text,
+        text=cached.text,
         backend=cached.backend,
         source_path=str(source_path),
         content_hash=cached.content_hash,
@@ -86,9 +76,7 @@ def _document_from_cache(
 
 def _document_for_cache(document: Agent2Document) -> _CachedAgent2Document:
     return _CachedAgent2Document(
-        markdown=document.markdown,
-        plain_text=document.plain_text,
-        pypdf_text=document.pypdf_text,
+        text=document.text,
         backend=document.backend,
         content_hash=document.content_hash,
         extraction_version=document.extraction_version,
@@ -98,125 +86,44 @@ def _document_for_cache(document: Agent2Document) -> _CachedAgent2Document:
 
 
 def _normalize_text(value: str) -> str:
-    """Normalize Unicode/newlines while preserving Markdown structure."""
+    """Normalize PDF text while preserving useful line boundaries."""
 
-    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = html.unescape(unicodedata.normalize("NFKC", str(value or "")))
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
-    lines = [re.sub(r"[ \t]+$", "", line) for line in text.split("\n")]
-    return "\n".join(lines).strip()
-
-
-def clean_docling_text(value: str, *, markdown: bool) -> str:
-    """Remove deterministic export artifacts without changing CV content."""
-
-    text = html.unescape(_normalize_text(value))
-
-    # Docling can preserve a PDF line-wrap hyphen as ``famil- iar`` or split
-    # one word over two Markdown paragraphs as ``recommenda-\n\ntions``.
     text = re.sub(
         r"(?<=[A-Za-zÀ-ÖØ-öø-ÿ])-[ \t]*(?:\n[ \t]*)+(?=[a-zà-öø-ÿ])",
         "",
         text,
     )
-    text = re.sub(
-        r"(?<=[A-Za-zÀ-ÖØ-öø-ÿ])-[ \t]+(?=[a-zà-öø-ÿ])",
-        "",
-        text,
-    )
-
-    if markdown:
-        # Contact separators are exported as isolated table bars, and the
-        # Projects section label can become a false final row in the skills
-        # table. Neither carries candidate information.
-        text = re.sub(r"(?m)^\s*\|\s*$\n?", "", text)
-        text = re.sub(
-            r"(?im)^\s*\|\s*projects\s*\|\s*projects\s*\|\s*$\n?",
-            "",
-            text,
-        )
-        text = re.sub(r"\[\|\s*", "[", text)
-
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    lines = [re.sub(r"[ \t]+$", "", line) for line in text.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def detect_cv_sections(markdown: str) -> tuple[str, ...]:
+def detect_cv_sections(text: str) -> tuple[str, ...]:
     """Return recognizable CV headings in their document order."""
 
     found: list[str] = []
     seen: set[str] = set()
-
-    for raw_line in _normalize_text(markdown).splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        heading_match = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
-        candidate = heading_match.group(1) if heading_match else line
-        candidate = re.sub(r"^\*\*(.*?)\*\*$", r"\1", candidate).strip(" :-")
+    for raw_line in _normalize_text(text).splitlines():
+        candidate = raw_line.strip().strip(" :-")
         key = candidate.casefold()
-
-        is_markdown_heading = heading_match is not None
-        is_known_standalone_heading = key in _KNOWN_CV_SECTIONS
-        if not (is_markdown_heading or is_known_standalone_heading):
+        if key not in _KNOWN_CV_SECTIONS or key in seen:
             continue
-        if key in seen:
-            continue
-
         found.append(candidate)
         seen.add(key)
-
     return tuple(found)
 
 
-@lru_cache(maxsize=1)
-def _get_docling_converter():
-    """Create one reusable converter and give a clear dependency error."""
-
-    try:
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import (
-            PdfPipelineOptions,
-            RapidOcrOptions,
-        )
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Docling is not installed. Install the project requirements before "
-            "running Agent 2's document-extraction comparison."
-        ) from exc
-
-    rapidocr_models = CACHE_DIR / "rapidocr"
-    rapidocr_models.mkdir(parents=True, exist_ok=True)
-    pipeline_options = PdfPipelineOptions(
-        ocr_options=RapidOcrOptions(
-            backend="torch",
-            lang=["en"],
-            rapidocr_params={"Global.model_root_dir": str(rapidocr_models)},
-        )
-    )
-    return DocumentConverter(
-        allowed_formats=[InputFormat.PDF],
-        format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-        },
-    )
-
-
 def _extract_pypdf_text(source_path: Path) -> str:
-    """Extract a stable sequential-text view for metadata validation."""
+    """Extract selectable text from every PDF page."""
 
     try:
         from pypdf import PdfReader
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "PyPDF is required for Agent 2's hybrid CV extraction."
-        ) from exc
+        raise RuntimeError("PyPDF is required for CV extraction.") from exc
 
     reader = PdfReader(source_path)
-    return _normalize_text(
-        "\n".join(page.extract_text() or "" for page in reader.pages)
-    )
+    return _normalize_text("\n".join(page.extract_text() or "" for page in reader.pages))
 
 
 def extract_cv_document_agent2(
@@ -224,75 +131,43 @@ def extract_cv_document_agent2(
     *,
     use_cache: bool = True,
 ) -> Agent2Document:
-    """Extract complementary Docling and PyPDF views of one local CV."""
+    """Extract selectable text from one local CV PDF."""
 
     source_path = Path(pdf_source).expanduser().resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"CV PDF does not exist: {source_path}")
     if source_path.suffix.casefold() != ".pdf":
-        raise ValueError(f"Agent 2 document extraction expects a PDF: {source_path}")
+        raise ValueError(f"CV extraction expects a PDF: {source_path}")
 
     content_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
     cache_identity = f"{EXTRACTION_VERSION}:{content_hash}"
     if use_cache:
-        cached = get_cached(
-            "agent2_document",
-            cache_identity,
-            _CachedAgent2Document,
-        )
+        cached = get_cached("agent2_document", cache_identity, _CachedAgent2Document)
         if (
             cached is not None
             and cached.content_hash == content_hash
             and cached.extraction_version == EXTRACTION_VERSION
         ):
-            print(
-                "  [CACHE HIT] Agent 2 document already extracted — "
-                "Docling and RapidOCR skipped."
-            )
+            print("  [CACHE HIT] CV document already extracted — PyPDF skipped.")
             return _document_from_cache(cached, source_path)
 
-    converter = _get_docling_converter()
-    result = converter.convert(source_path)
-    markdown = clean_docling_text(
-        result.document.export_to_markdown(), markdown=True
-    )
-    plain_text = clean_docling_text(result.document.export_to_text(), markdown=False)
-    pypdf_text = _extract_pypdf_text(source_path)
+    text = _extract_pypdf_text(source_path)
+    if not text:
+        raise ValueError(
+            "This PDF contains no selectable text. Export the CV directly from "
+            "Word, Google Docs, or Canva instead of uploading a scanned image."
+        )
 
-    if not markdown or not plain_text:
-        raise ValueError(f"Docling extracted no usable text from: {source_path}")
-
-    sections = detect_cv_sections(markdown)
+    sections = detect_cv_sections(text)
     warnings: list[str] = []
     if not sections:
-        warnings.append("Docling did not expose any recognizable CV section headings.")
-    if len(plain_text) < 200:
-        warnings.append(
-            f"The extracted CV is unusually short ({len(plain_text)} characters)."
-        )
-
-    # Scanned or image-only PDFs have no embedded text layer: PyPDF returns
-    # nothing even when Docling's OCR succeeds. Treat that as a fallback, not
-    # a failure, so the sequential text view remains usable downstream.
-    if not pypdf_text:
-        pypdf_text = plain_text
-        backend = "docling_ocr"
-        warnings.append(
-            "PyPDF extracted no text (scanned or image-only PDF); "
-            "the Docling OCR text is used as the sequential view."
-        )
-    else:
-        backend = "docling+pypdf"
-        if len(pypdf_text) < 200:
-            warnings.append(
-                f"PyPDF extracted unusually short text ({len(pypdf_text)} characters)."
-            )
+        warnings.append("No recognizable CV section headings were detected.")
+    if len(text) < 200:
+        warnings.append(f"The extracted CV is unusually short ({len(text)} characters).")
 
     document = Agent2Document(
-        markdown=markdown,
-        plain_text=plain_text,
-        pypdf_text=pypdf_text,
-        backend=backend,
+        text=text,
+        backend="pypdf",
         source_path=str(source_path),
         content_hash=content_hash,
         extraction_version=EXTRACTION_VERSION,

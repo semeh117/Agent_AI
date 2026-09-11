@@ -24,7 +24,7 @@ def parse_uploaded_cv(content: bytes) -> tuple[dict, list[str]]:
     try:
         document = extract_cv_document_agent2(path)
         profile = extract_cv_info_agent2(
-            document.pypdf_text, layout_text=document.markdown,
+            document.text,
             cache_identity=f"{document.extraction_version}:{document.content_hash}",
         )
         return profile.model_dump(), list(document.warnings)
