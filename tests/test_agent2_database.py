@@ -27,6 +27,7 @@ from next_chapter.services.application_tracker import (  # noqa: E402
     update_application_status,
 )
 from next_chapter.services.interview_preparation import (  # noqa: E402
+    generate_interview_content,
     generate_interview_preparation,
     list_interview_preparations,
 )
@@ -281,12 +282,17 @@ class _FakeInterviewLLM:
 
 
 class _FakeGroqSchemaError(Exception):
-    def __init__(self, failed_generation: dict):
+    def __init__(self, failed_generation: dict | str):
         super().__init__("Generated JSON does not match the expected schema.")
         self.body = {
             "error": {
                 "code": "json_validate_failed",
-                "failed_generation": json.dumps(failed_generation),
+                "message": "Failed to validate JSON.",
+                "failed_generation": (
+                    failed_generation
+                    if isinstance(failed_generation, str)
+                    else json.dumps(failed_generation)
+                ),
             }
         }
 
@@ -303,6 +309,22 @@ class _FakeIncompleteInterviewLLM:
     def with_structured_output(self, _schema, **kwargs):
         assert kwargs == {"method": "json_schema", "strict": True}
         return _FakeIncompleteStructuredInterview()
+
+
+class _FakeRetryInterviewLLM:
+    def __init__(self, *, always_fail: bool = False):
+        self.always_fail = always_fail
+        self.calls = 0
+
+    def with_structured_output(self, _schema, **kwargs):
+        assert kwargs == {"method": "json_schema", "strict": True}
+        return self
+
+    def invoke(self, prompt):
+        self.calls += 1
+        if self.always_fail or self.calls == 1:
+            raise _FakeGroqSchemaError("")
+        return _FakeStructuredInterview().invoke(prompt)
 
 
 def test_agent2_interview_preparation_pdf() -> None:
@@ -393,13 +415,72 @@ def test_agent2_interview_recovers_missing_trailing_lists() -> None:
         assert Path(preparation.pdf_path).exists()
 
 
+def test_agent2_interview_retries_empty_schema_failure() -> None:
+    profile = {
+        "full_name": "Retry Candidate",
+        "skills": ["Python", "RAG"],
+        "experience_years": 3.0,
+        "highest_education_level": "Bachelor",
+    }
+    job = {
+        "job_title": "AI Engineer",
+        "company": "Retry AI",
+        "url": "https://example.com/jobs/retry",
+        "description": "Build reliable AI systems.",
+        "final_score": 79.0,
+        "skills_detail": {"matching": [], "missing": ["Kubernetes"]},
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "agent2.sqlite3"
+        application = save_application(profile, job, database_path=database_path)
+        llm = _FakeRetryInterviewLLM()
+        content = generate_interview_content(application, profile, llm=llm)
+        assert llm.calls == 2
+        assert len(content.technical_questions) == 5
+
+
+def test_agent2_interview_falls_back_after_repeated_schema_failure() -> None:
+    profile = {
+        "full_name": "Fallback Candidate",
+        "skills": ["Python", "RAG"],
+        "skill_evidence": {"Python": "Python project listed in the CV."},
+        "experience_years": 3.0,
+        "highest_education_level": "Bachelor",
+    }
+    job = {
+        "job_title": "AI Engineer",
+        "company": "Fallback AI",
+        "url": "https://example.com/jobs/fallback",
+        "description": "Build reliable AI systems with Python and Kubernetes.",
+        "final_score": 79.0,
+        "skills_detail": {
+            "matching": [{"job_skill": "Python", "matched_via": "Python"}],
+            "missing": ["Kubernetes"],
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        database_path = Path(temporary_directory) / "agent2.sqlite3"
+        application = save_application(profile, job, database_path=database_path)
+        llm = _FakeRetryInterviewLLM(always_fail=True)
+        content = generate_interview_content(application, profile, llm=llm)
+        assert llm.calls == 2
+        assert len(content.technical_questions) == 5
+        assert len(content.gap_questions) == 2
+        assert len(content.behavioral_questions) == 3
+        assert "Kubernetes" in content.gap_questions[0].question
+
+
 def main() -> int:
     test_agent2_database_schema()
     test_agent2_database_constraints()
     test_agent2_application_tracker()
     test_agent2_interview_preparation_pdf()
     test_agent2_interview_recovers_missing_trailing_lists()
-    print("Agent 2 SQLite and interview preparation tests: PASS (5/5)")
+    test_agent2_interview_retries_empty_schema_failure()
+    test_agent2_interview_falls_back_after_repeated_schema_failure()
+    print("Agent 2 SQLite and interview preparation tests: PASS (7/7)")
     return 0
 
 if __name__ == "__main__":

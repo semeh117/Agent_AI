@@ -161,7 +161,7 @@ def _validate_application_node(
 
 
 def _generate_content_node(state: Agent2InterviewState) -> Agent2InterviewState:
-    """Call the shared structured Groq generation exactly once."""
+    """Call the shared structured generation with its bounded recovery policy."""
 
     try:
         application = ApplicationRecord.model_validate(state["application"])

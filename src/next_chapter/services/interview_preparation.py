@@ -11,7 +11,7 @@ import re
 from typing import Any, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -284,16 +284,27 @@ def render_interview_preparation_pdf(
 def _candidate_prompt_profile(profile: dict[str, Any]) -> dict[str, Any]:
     """Exclude contact identifiers before sending profile evidence to the LLM."""
 
-    allowed = (
-        "full_name",
-        "skills",
-        "skill_evidence",
-        "job_titles",
-        "experience_years",
-        "education",
-        "highest_education_level",
-    )
-    return {key: profile.get(key) for key in allowed if key in profile}
+    skills = [str(item)[:120] for item in (profile.get("skills") or [])[:40]]
+    evidence = profile.get("skill_evidence") or {}
+    return {
+        "full_name": str(profile.get("full_name") or "")[:120],
+        "skills": skills,
+        "skill_evidence": {
+            skill: str(evidence.get(skill) or "")[:400]
+            for skill in skills
+            if evidence.get(skill)
+        },
+        "job_titles": [
+            str(item)[:160] for item in (profile.get("job_titles") or [])[:10]
+        ],
+        "experience_years": profile.get("experience_years"),
+        "education": [
+            str(item)[:300] for item in (profile.get("education") or [])[:10]
+        ],
+        "highest_education_level": str(
+            profile.get("highest_education_level") or ""
+        )[:80],
+    }
 
 
 def _record_from_row(row: Any) -> InterviewPreparationRecord:
@@ -375,23 +386,182 @@ def get_interview_model_info() -> dict[str, str]:
 def build_interview_prompt(application: Any, profile: dict[str, Any]) -> str:
     """Build the single grounded generation prompt shared by every caller."""
 
-    matching = application.match_details.get("matching", [])
-    missing = application.match_details.get("missing", [])
+    matching = application.match_details.get("matching", [])[:30]
+    missing = application.match_details.get("missing", [])[:30]
     return f"""You create rigorous interview preparation for one real candidate and one real job.
 
 Return exactly the requested structured object. Ground every sample answer in the candidate profile. Never invent an employer, project, achievement, number, technology, or education detail. If the candidate lacks evidence, say so honestly and propose how they should explain their learning plan. Treat missing skills as gaps, never as possessed skills.
 
-Create exactly 5 technical questions, 2 gap questions, 3 behavioral questions, 4 questions for the interviewer, and a 5-item checklist. Include every field in the schema, especially questions_to_ask and preparation_checklist. Keep the role summary below 120 words. Keep each reason below 30 words, each answer strategy below 45 words, and each sample answer below 90 words. Include no more than two short CV evidence items per question. Sample answers must be concise first-person practice answers. Behavioral answers should use a Situation-Task-Action-Result structure when evidence permits.
+Create exactly 5 technical questions, 2 gap questions, 3 behavioral questions, 4 questions for the interviewer, and a 5-item checklist. Include every field in the schema, especially questions_to_ask and preparation_checklist. Keep the role summary below 100 words. Keep each reason below 25 words, each answer strategy below 35 words, and each sample answer below 70 words. Include no more than two short CV evidence items per question. Sample answers must be concise first-person practice answers. Behavioral answers should use a Situation-Task-Action-Result structure when evidence permits.
 
 CANDIDATE PROFILE:
 {json.dumps(_candidate_prompt_profile(profile), ensure_ascii=False)}
 
 JOB:
-{json.dumps({"title": application.job_title, "company": application.company, "description": application.description}, ensure_ascii=False)}
+{json.dumps({"title": application.job_title, "company": application.company, "description": str(application.description or "")[:12000]}, ensure_ascii=False)}
 
 MATCH EVIDENCE:
 {json.dumps({"matching": matching, "missing": missing, "final_score": application.final_score}, ensure_ascii=False)}
 """
+
+
+def _is_schema_generation_error(error: Exception) -> bool:
+    """Identify provider or local validation failures that are safe to retry."""
+
+    if isinstance(error, ValidationError):
+        return True
+    body = getattr(error, "body", None)
+    error_body = body.get("error", body) if isinstance(body, dict) else {}
+    code = str(error_body.get("code") or "").casefold()
+    message = str(error_body.get("message") or error).casefold()
+    return code in {"json_validate_failed", "tool_use_failed"} or any(
+        marker in message
+        for marker in ("failed to validate json", "invalid tool call")
+    )
+
+
+def _invoke_structured_interview(llm: Any, prompt: str) -> InterviewPreparationContent:
+    structured_llm = llm.with_structured_output(
+        InterviewPreparationContent,
+        method="json_schema",
+        strict=True,
+    )
+    response = structured_llm.invoke(prompt)
+    return (
+        response
+        if isinstance(response, InterviewPreparationContent)
+        else InterviewPreparationContent.model_validate(response)
+    )
+
+
+def _fallback_interview_content(
+    application: Any,
+    profile: dict[str, Any],
+) -> InterviewPreparationContent:
+    """Build a complete, honest pack if repeated provider JSON generation fails."""
+
+    details = application.match_details or {}
+    matching = details.get("matching") or []
+    missing = [
+        str(item)[:160]
+        for item in (details.get("missing") or [])
+        if str(item)
+    ]
+    skills = [
+        str(item)[:160] for item in (profile.get("skills") or []) if str(item)
+    ]
+    evidence_map = profile.get("skill_evidence") or {}
+
+    matched_topics: list[str] = []
+    matched_evidence: dict[str, str] = {}
+    for item in matching:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("job_skill") or "").strip()[:160]
+        if not topic or topic in matched_topics:
+            continue
+        matched_topics.append(topic)
+        via = str(item.get("matched_via") or topic).strip()
+        matched_evidence[topic] = str(
+            evidence_map.get(via) or evidence_map.get(topic) or f"CV lists {via}."
+        )
+
+    topics = matched_topics + [skill for skill in skills if skill not in matched_topics]
+    topics.extend(
+        [
+            "technical design",
+            "testing and reliability",
+            "deployment and monitoring",
+            "performance trade-offs",
+            "collaboration on technical work",
+        ]
+    )
+    unique_topics = list(dict.fromkeys(topics))[:5]
+
+    def evidence_for(topic: str) -> str:
+        return str(
+            matched_evidence.get(topic)
+            or evidence_map.get(topic)
+            or (
+                f"CV lists {topic}."
+                if topic in skills
+                else "No direct CV evidence; prepare an honest learning example."
+            )
+        )[:500]
+
+    technical = [
+        InterviewQuestion(
+            question=f"How would you apply {topic} in this role?",
+            why_asked="This checks practical understanding of a relevant technical area.",
+            answer_strategy=(
+                "Explain the problem, approach, trade-offs, validation, and result using "
+                "only experience supported by the CV."
+            ),
+            sample_answer=(
+                f"My relevant evidence is: {evidence_for(topic)} I would explain the "
+                "problem I faced, the choices I made, and how I verified the result."
+            ),
+            cv_evidence=[evidence_for(topic)],
+        )
+        for topic in unique_topics
+    ]
+
+    gap_topics = (missing + ["an unfamiliar requirement", "a new team tool"])[:2]
+    gaps = [
+        InterviewQuestion(
+            question=f"How would you close your experience gap in {topic}?",
+            why_asked="This checks honesty, learning speed, and practical planning.",
+            answer_strategy=(
+                "Acknowledge the gap, connect adjacent CV evidence, and give a concrete "
+                "learning and validation plan."
+            ),
+            sample_answer=(
+                f"My CV does not claim direct experience with {topic}. I would be clear "
+                "about that, build on my related skills, and validate my learning with a "
+                "small practical task and feedback from the team."
+            ),
+            cv_evidence=["No direct CV evidence; this is an identified job gap."],
+        )
+        for topic in gap_topics
+    ]
+
+    primary_evidence = evidence_for(unique_topics[0])
+    behavioral_prompts = [
+        "Tell me about a difficult technical problem you worked through.",
+        "Describe a time you had to learn a new technology quickly.",
+        "Tell me about a project where you collaborated with other people.",
+    ]
+    behavioral = [
+        InterviewQuestion(
+            question=question,
+            why_asked="This checks communication, ownership, and evidence-based reflection.",
+            answer_strategy=(
+                "Use Situation, Task, Action, and Result. Choose a CV-backed example and "
+                "avoid adding unsupported metrics."
+            ),
+            sample_answer=(
+                f"I would use this CV evidence: {primary_evidence} I would state the "
+                "situation and my responsibility, describe my actions, and finish with "
+                "the verified result and what I learned."
+            ),
+            cv_evidence=[primary_evidence],
+        )
+        for question in behavioral_prompts
+    ]
+
+    return InterviewPreparationContent(
+        role_summary=(
+            "Structured model generation was unavailable, so this recovery pack "
+            f"prepares for the {application.job_title} role at {application.company} "
+            "using verified CV evidence, clear technical explanations, and honest "
+            "plans for identified skill gaps."
+        ),
+        technical_questions=technical,
+        gap_questions=gaps,
+        behavioral_questions=behavioral,
+        questions_to_ask=_default_questions_to_ask(application),
+        preparation_checklist=_default_preparation_checklist(application),
+    )
 
 
 def generate_interview_content(
@@ -408,25 +578,33 @@ def generate_interview_content(
     """
 
     prompt = build_interview_prompt(application, profile)
-    if llm is None:
+    llm_was_provided = llm is not None
+    if not llm_was_provided:
         llm = get_interview_llm(temperature=0.2)
-    structured_llm = llm.with_structured_output(
-        InterviewPreparationContent,
-        method="json_schema",
-        strict=True,
-    )
     try:
-        response = structured_llm.invoke(prompt)
+        return _invoke_structured_interview(llm, prompt)
     except Exception as error:
         recovered = _recover_schema_failed_generation(error, application)
-        if recovered is None:
+        if recovered is not None:
+            return recovered
+        if not _is_schema_generation_error(error):
             raise
-        return recovered
-    return (
-        response
-        if isinstance(response, InterviewPreparationContent)
-        else InterviewPreparationContent.model_validate(response)
+
+    retry_llm = llm if llm_was_provided else get_interview_llm(temperature=0.0)
+    retry_prompt = (
+        prompt
+        + "\nRETRY: The previous response failed JSON schema validation. Return one "
+        "complete object only, with every required list and exact item count."
     )
+    try:
+        return _invoke_structured_interview(retry_llm, retry_prompt)
+    except Exception as error:
+        recovered = _recover_schema_failed_generation(error, application)
+        if recovered is not None:
+            return recovered
+        if not _is_schema_generation_error(error):
+            raise
+        return _fallback_interview_content(application, profile)
 
 
 def persist_interview_preparation(
