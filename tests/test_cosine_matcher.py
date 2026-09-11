@@ -68,6 +68,50 @@ class FakeEmbeddings:
         return [self.vectors[text] for text in texts]
 
 
+def test_embedding_cache_miss_downloads_once_when_allowed():
+    downloaded = Mock()
+    config.get_embeddings.cache_clear()
+    try:
+        with (
+            patch.object(config, "EMBEDDING_LOCAL_ONLY", False),
+            patch.object(
+                config,
+                "_create_embeddings",
+                side_effect=[OSError("missing"), downloaded],
+            ) as create,
+        ):
+            assert config.get_embeddings() is downloaded
+            assert config.get_embeddings() is downloaded
+            assert [call.kwargs["local_files_only"] for call in create.call_args_list] == [
+                True,
+                False,
+            ]
+    finally:
+        config.get_embeddings.cache_clear()
+
+
+def test_embedding_cache_miss_respects_strict_offline_mode():
+    config.get_embeddings.cache_clear()
+    try:
+        with (
+            patch.object(config, "EMBEDDING_LOCAL_ONLY", True),
+            patch.object(
+                config,
+                "_create_embeddings",
+                side_effect=OSError("missing"),
+            ) as create,
+        ):
+            try:
+                config.get_embeddings()
+            except RuntimeError as exc:
+                assert "EMBEDDING_LOCAL_ONLY is enabled" in str(exc)
+            else:
+                raise AssertionError("Strict offline mode should reject a cache miss.")
+            create.assert_called_once_with(local_files_only=True)
+    finally:
+        config.get_embeddings.cache_clear()
+
+
 def with_fake_embeddings(fake, function):
     original = config.get_embeddings
     config.get_embeddings = lambda: fake

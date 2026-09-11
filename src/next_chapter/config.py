@@ -4,6 +4,7 @@
 orchestration, cover-letter, and embedding workloads use role-specific
 factories so changing one model does not silently change every workflow.
 """
+from functools import lru_cache
 import os
 from dotenv import load_dotenv
 from next_chapter.paths import PROJECT_ROOT
@@ -12,7 +13,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-EMBEDDING_LOCAL_ONLY = os.getenv("EMBEDDING_LOCAL_ONLY", "true").strip().lower() in {
+EMBEDDING_LOCAL_ONLY = os.getenv("EMBEDDING_LOCAL_ONLY", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -163,22 +164,26 @@ def get_interview_llm(temperature: float = 0.2):
     return _build_llm(provider, model, temperature, role="interview")
 
 
-def get_embeddings():
+def _create_embeddings(*, local_files_only: bool):
     from langchain_huggingface import HuggingFaceEmbeddings
 
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={"local_files_only": local_files_only},
+    )
+
+
+@lru_cache(maxsize=1)
+def get_embeddings():
+    """Load cached MiniLM weights or download them once when allowed."""
+
     try:
-        return HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            # Agent 2 already has its embedding weights in the Hugging Face
-            # cache. Loading cache-only avoids startup metadata requests,
-            # optional-file 404s, redirects, and unauthenticated Hub warnings.
-            model_kwargs={"local_files_only": EMBEDDING_LOCAL_ONLY},
-        )
+        return _create_embeddings(local_files_only=True)
     except OSError as exc:
-        if not EMBEDDING_LOCAL_ONLY:
-            raise
-        raise RuntimeError(
-            f"Embedding model '{EMBEDDING_MODEL}' is not available in the local "
-            "Hugging Face cache. Set EMBEDDING_LOCAL_ONLY=false for one run to "
-            "download it, then restore EMBEDDING_LOCAL_ONLY=true."
-        ) from exc
+        if EMBEDDING_LOCAL_ONLY:
+            raise RuntimeError(
+                f"Embedding model '{EMBEDDING_MODEL}' is not available in the "
+                "local Hugging Face cache and EMBEDDING_LOCAL_ONLY is enabled."
+            ) from exc
+
+    return _create_embeddings(local_files_only=False)

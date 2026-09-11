@@ -49,19 +49,18 @@ nonstandard executable locations. Streamlit Community Cloud installs Chromium
 and its matching driver from `packages.txt`. Scraping requires internet access
 and can fail if LinkedIn serves a login page, restriction, or changed markup.
 
-Download the embedding model once while online:
+The first semantic match checks the local Hugging Face cache and downloads the
+public MiniLM model if it is missing. The loaded model is reused for later
+searches in the same app process. Keep `EMBEDDING_LOCAL_ONLY=false` on fresh
+Streamlit Cloud deployments. An optional `HF_TOKEN` increases Hub download rate
+limits. Set local-only mode to `true` only after the model is cached and when
+strict offline operation is required.
 
-```powershell
-$env:EMBEDDING_LOCAL_ONLY = "false"
-.\.venv\Scripts\python.exe -c "from next_chapter.config import get_embeddings; get_embeddings()"
-Remove-Item Env:EMBEDDING_LOCAL_ONLY
-```
-
-Normal runs default to cached embedding weights. Place the English ESCO skills
-CSV at `data/skills_en.csv`, or set `ESCO_SKILLS_PATH`. Obtain the vocabulary
-from the European Commission's ESCO download service. Expected columns are
-`conceptUri`, `preferredLabel`, and `altLabels`. Without it, the matcher continues
-with literal, alias, capability, and semantic matching; ESCO normalization is unavailable.
+Place the English ESCO skills CSV at `data/skills_en.csv`, or set
+`ESCO_SKILLS_PATH`. Obtain the vocabulary from the European Commission's ESCO
+download service. Expected columns are `conceptUri`, `preferredLabel`, and
+`altLabels`. Without it, the matcher continues with literal, alias, capability,
+and semantic matching; ESCO normalization is unavailable.
 
 ## Use the workspace
 
