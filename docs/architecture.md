@@ -9,7 +9,7 @@ storage, and PDF rendering execute in that environment.
 
 ```text
 app.py → next_chapter.ui.app
-  profile → PyPDF text extraction → structured CV parsing → review
+  profile → dual-view PyPDF extraction → structured CV parsing → review
   matches → Agent 2 LangGraph
               query → LinkedIn search → parse jobs → cosine ranking
               → save applications → cover letter → approval pause
@@ -54,8 +54,9 @@ models at its public interface. Workflow node names and IDs are preserved.
 Search IDs in the Streamlit URL can restore paused searches across restarts.
 
 `cache/` keeps content-addressed extraction and parser results. The PyPDF
-extractor has its own cache version, so results from the former extractor are
-not reused. Interview PDFs stay in `output/` and their saved paths remain valid.
+extractor stores readable and layout-oriented views under its own cache version,
+so results from former extractors are not reused. Interview PDFs stay in
+`output/` and their saved paths remain valid.
 Credentials and `.env` stay in the workspace root.
 
 ## Development and verification

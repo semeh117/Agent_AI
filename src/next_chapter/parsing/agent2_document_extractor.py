@@ -21,25 +21,42 @@ from next_chapter.storage.extraction_cache import get_cached, set_cached
 _KNOWN_CV_SECTIONS = (
     "professional summary",
     "profile",
+    "profil",
+    "profil professionnel",
     "technical skills",
     "skills",
+    "compétences techniques",
+    "competences techniques",
+    "compétences",
+    "competences",
     "professional experience",
     "work experience",
     "experience",
+    "expérience professionnelle",
+    "experience professionnelle",
+    "expériences professionnelles",
+    "experiences professionnelles",
+    "expérience",
     "projects",
+    "projets",
     "education",
+    "formation",
+    "études",
+    "etudes",
     "certifications",
     "languages",
+    "langues",
 )
 
-EXTRACTION_VERSION = "agent2-pypdf-extractor-v2"
+EXTRACTION_VERSION = "agent2-pypdf-extractor-v3"
 
 
 @dataclass(frozen=True)
 class Agent2Document:
-    """Text and metadata extracted from one CV PDF."""
+    """Complementary text views and metadata extracted from one CV PDF."""
 
     text: str
+    layout_text: str
     backend: str
     source_path: str
     content_hash: str
@@ -52,6 +69,7 @@ class _CachedAgent2Document(BaseModel):
     """Serializable extraction payload stored independently from its path."""
 
     text: str
+    layout_text: str
     backend: str
     content_hash: str
     extraction_version: str
@@ -65,6 +83,7 @@ def _document_from_cache(
 ) -> Agent2Document:
     return Agent2Document(
         text=cached.text,
+        layout_text=cached.layout_text,
         backend=cached.backend,
         source_path=str(source_path),
         content_hash=cached.content_hash,
@@ -77,6 +96,7 @@ def _document_from_cache(
 def _document_for_cache(document: Agent2Document) -> _CachedAgent2Document:
     return _CachedAgent2Document(
         text=document.text,
+        layout_text=document.layout_text,
         backend=document.backend,
         content_hash=document.content_hash,
         extraction_version=document.extraction_version,
@@ -114,8 +134,8 @@ def detect_cv_sections(text: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _extract_pypdf_text(source_path: Path) -> str:
-    """Extract selectable text from every PDF page."""
+def _extract_pypdf_views(source_path: Path) -> tuple[str, str]:
+    """Extract readable and layout-oriented text from every PDF page."""
 
     try:
         from pypdf import PdfReader
@@ -123,7 +143,25 @@ def _extract_pypdf_text(source_path: Path) -> str:
         raise RuntimeError("PyPDF is required for CV extraction.") from exc
 
     reader = PdfReader(source_path)
-    return _normalize_text("\n".join(page.extract_text() or "" for page in reader.pages))
+    plain_text = _normalize_text(
+        "\n".join(page.extract_text() or "" for page in reader.pages)
+    )
+    try:
+        layout_text = _normalize_text(
+            "\n".join(
+                page.extract_text(
+                    extraction_mode="layout",
+                    layout_mode_space_vertically=False,
+                )
+                or ""
+                for page in reader.pages
+            )
+        )
+    except Exception:
+        # Layout mode is experimental in PyPDF. A readable plain extraction is
+        # still useful when a particular PDF cannot produce the second view.
+        layout_text = ""
+    return plain_text or layout_text, layout_text or plain_text
 
 
 def extract_cv_document_agent2(
@@ -151,7 +189,7 @@ def extract_cv_document_agent2(
             print("  [CACHE HIT] CV document already extracted — PyPDF skipped.")
             return _document_from_cache(cached, source_path)
 
-    text = _extract_pypdf_text(source_path)
+    text, layout_text = _extract_pypdf_views(source_path)
     if not text:
         raise ValueError(
             "This PDF contains no selectable text. Export the CV directly from "
@@ -167,6 +205,7 @@ def extract_cv_document_agent2(
 
     document = Agent2Document(
         text=text,
+        layout_text=layout_text,
         backend="pypdf",
         source_path=str(source_path),
         content_hash=content_hash,

@@ -161,8 +161,8 @@ Reviewed inputs live in `tests/fixtures/parsers/`; benchmark output goes to
 
 `runtime/agent2.sqlite3` stores profiles, applications, workflow checkpoints and
 delivery receipts. `cache/` stores extracted/parsed content; `output/` contains
-generated files. PyPDF extracts selectable CV text in the app environment; no
-OCR model is downloaded or run. Original temporary upload files are removed
+generated files. PyPDF extracts complementary readable and layout-oriented CV
+text views in the app environment; no OCR model is downloaded or run. Original temporary upload files are removed
 after extraction. CV text goes to the configured providers during parsing and
 generation.
 

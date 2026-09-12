@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from next_chapter.config import get_parser_llm
 
-CV_CACHE_VERSION = "agent2-cv-parser-v10-hybrid"
+CV_CACHE_VERSION = "agent2-cv-parser-v11-pypdf-views"
 JOB_CACHE_VERSION = "agent2-job-parser-v13"
 MAX_CV_SKILLS = 100
 MAX_JOB_SKILLS = 45
@@ -85,9 +85,10 @@ def _ground_atomic_skills(
 def _source_excerpt(value: str, source_text: str, radius: int = 120) -> str:
     """Return a compact source excerpt around the first exact occurrence."""
 
-    index = source_text.casefold().find(value.casefold())
-    if index < 0:
+    positions = _skill_positions(value, source_text)
+    if not positions:
         return ""
+    index = positions[0]
     start = max(0, index - radius)
     end = min(len(source_text), index + len(value) + radius)
     return " ".join(source_text[start:end].split())

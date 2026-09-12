@@ -6,7 +6,7 @@ prints the document-extraction and structured-parsing results side by side.
 Usage:
     python scripts/inspect_cv_parsing.py
     python scripts/inspect_cv_parsing.py --no-cache
-    python scripts/inspect_cv_parsing.py --cv cv/Semah_Mechi_.pdf
+    python scripts/inspect_cv_parsing.py --cv cv/candidate.pdf
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ def _print_extraction(cv_path: Path, use_cache: bool) -> None:
     print(f"Content SHA-256: {document.content_hash[:16]}...")
     print(f"Extraction version: {document.extraction_version}")
     print(f"Extracted characters: {len(document.text)}")
+    print(f"Layout-view characters: {len(document.layout_text)}")
 
     print("\nDetected sections:")
     if document.detected_sections:
@@ -82,6 +83,7 @@ def _print_parse(cv_path: Path, use_cache: bool) -> None:
     document = extract_cv_document_agent2(cv_path, use_cache=True)
     cv_info = extract_cv_info_agent2(
         document.text,
+        layout_text=document.layout_text,
         cache_identity=(
             f"{document.extraction_version}:{document.content_hash}"
         ),

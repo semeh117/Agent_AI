@@ -142,7 +142,7 @@ def _clean_query(value: str) -> str:
 
 
 def _load_cv_node(state: Agent2State) -> Agent2State:
-    """Load a supplied profile or parse a PDF through Agent 2's hybrid path."""
+    """Load a supplied profile or parse a PDF through the dual-view PyPDF path."""
 
     try:
         if state.get("cv_info"):
@@ -169,6 +169,7 @@ def _load_cv_node(state: Agent2State) -> Agent2State:
         )
         cv_info = extract_cv_info_agent2(
             document.text,
+            layout_text=document.layout_text,
             cache_identity=f"{document.extraction_version}:{document.content_hash}",
             use_cache=bool(state.get("use_cache", True)),
         )

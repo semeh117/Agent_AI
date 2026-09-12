@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date
-import re
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -27,7 +26,6 @@ from next_chapter.parsing.agent2_cv_rules import (
     _cv_headline,
     _deterministic_education_level,
     _deterministic_experience_years,
-    _deterministic_markdown_name,
     _deterministic_plain_name,
     _explicit_cv_project_stack_items,
     _explicit_cv_skill_items,
@@ -84,12 +82,11 @@ def extract_cv_info_agent2(
     *,
     layout_text: Optional[str] = None,
     cache_identity: Optional[str] = None,
-) -> CVInfo:
-    """Parse one CV using source text plus optional structured fixture text.
+) -> Agent2CVInfo:
+    """Parse one CV using readable text plus an optional layout-oriented view.
 
-    ``cv_text`` is used for metadata and the LLM call. ``layout_text`` remains
-    available for replaying older evaluation fixtures. Production uploads use
-    the PyPDF text for both extraction and grounding.
+    PyPDF's plain view usually preserves words, while its layout view can
+    preserve boundaries between visual columns. Both describe the same CV.
     """
 
     source = str(cv_text or "").strip()
@@ -99,6 +96,15 @@ def extract_cv_info_agent2(
     grounding_source = source
     if layout_source != source:
         grounding_source = f"{source}\n\n--- LAYOUT VIEW ---\n{layout_source}"
+    layout_prompt = ""
+    if layout_source != source:
+        layout_prompt = f"""
+
+SECOND VIEW OF THE SAME CV (use only to recover visual columns; do not count
+anything twice):
+---
+{layout_source}
+---"""
     identity = (
         f"pdf-sha256:{cache_identity.strip()}"
         if cache_identity and cache_identity.strip()
@@ -146,7 +152,7 @@ Rules:
 CV:
 ---
 {source}
----"""
+---{layout_prompt}"""
 
     def validate_cv(parsed: BaseModel) -> None:
         all_extracted_skills = parsed.skills + parsed.contextual_skills
@@ -195,10 +201,7 @@ CV:
         data["experience_years"] = deterministic_experience
     data["job_titles"] = _clean_cv_job_titles(data.get("job_titles", []), source)
     data["headline"] = _cv_headline(source)
-    deterministic_name = (
-        _deterministic_plain_name(source)
-        or _deterministic_markdown_name(layout_source)
-    )
+    deterministic_name = _deterministic_plain_name(source)
     if deterministic_name is not None:
         data["full_name"] = deterministic_name
     elif str(data.get("full_name") or "").strip().casefold() in _CV_SECTION_HEADINGS:

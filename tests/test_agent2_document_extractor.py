@@ -15,10 +15,10 @@ def test_agent2_document_extraction_cache() -> None:
     extracted_text = "Skills\nPython\n" + ("Candidate experience. " * 15)
     calls = 0
 
-    def fake_extract(_source_path: Path) -> str:
+    def fake_extract(_source_path: Path) -> tuple[str, str]:
         nonlocal calls
         calls += 1
-        return extracted_text
+        return extracted_text, "Skills        Python"
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -30,7 +30,7 @@ def test_agent2_document_extraction_cache() -> None:
             patch.object(extraction_cache, "CACHE_DIR", cache_path),
             patch.object(
                 document_extractor,
-                "_extract_pypdf_text",
+                "_extract_pypdf_views",
                 side_effect=fake_extract,
             ),
         ):
@@ -38,6 +38,7 @@ def test_agent2_document_extraction_cache() -> None:
             second = document_extractor.extract_cv_document_agent2(pdf_path)
             assert calls == 1
             assert second.text == first.text
+            assert second.layout_text == first.layout_text
             assert second.backend == "pypdf"
             assert second.content_hash == first.content_hash
 
@@ -49,13 +50,13 @@ def test_agent2_document_extraction_cache() -> None:
             with patch.object(
                 document_extractor,
                 "EXTRACTION_VERSION",
-                "agent2-pypdf-extractor-cache-test-v3",
+                "agent2-pypdf-extractor-cache-test-v4",
             ):
                 version_changed = document_extractor.extract_cv_document_agent2(
                     pdf_path
                 )
             assert calls == 3
-            assert version_changed.extraction_version.endswith("v3")
+            assert version_changed.extraction_version.endswith("v4")
 
             document_extractor.extract_cv_document_agent2(
                 pdf_path,
@@ -72,7 +73,7 @@ def test_scanned_pdf_error_is_clear() -> None:
     with tempfile.TemporaryDirectory() as temporary_directory:
         pdf_path = Path(temporary_directory) / "scanned.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 image-only placeholder")
-        with patch.object(document_extractor, "_extract_pypdf_text", return_value=""):
+        with patch.object(document_extractor, "_extract_pypdf_views", return_value=("", "")):
             try:
                 document_extractor.extract_cv_document_agent2(
                     pdf_path,
@@ -103,9 +104,25 @@ def test_text_pdf_is_extracted_with_pypdf() -> None:
         assert document.backend == "pypdf"
         assert "Skills" in document.text
         assert "Python and SQL" in document.text
+        assert "Skills" in document.layout_text
+
+
+def test_french_sections_are_detected() -> None:
+    sections = document_extractor.detect_cv_sections(
+        "Profil\nCompétences\nExpérience professionnelle\nFormation\nProjets\nLangues"
+    )
+    assert sections == (
+        "Profil",
+        "Compétences",
+        "Expérience professionnelle",
+        "Formation",
+        "Projets",
+        "Langues",
+    )
 
 
 if __name__ == "__main__":
     test_agent2_document_extraction_cache()
     test_scanned_pdf_error_is_clear()
     test_text_pdf_is_extracted_with_pypdf()
+    test_french_sections_are_detected()

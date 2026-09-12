@@ -10,9 +10,7 @@ from next_chapter.parsing.agent2_parser_common import (
     MAX_CV_SKILLS,
     MAX_RAW_CV_SKILLS,
     _canonical_skill_key,
-    _evidence_map,
     _ground_atomic_skills,
-    _normalize_education,
 )
 
 
@@ -22,15 +20,31 @@ _CV_SECTION_HEADINGS = {
     "professional summary",
     "profile summary",
     "profile",
+    "profil",
+    "profil professionnel",
     "technical skills",
     "skills",
+    "compétences techniques",
+    "competences techniques",
+    "compétences",
+    "competences",
     "professional experience",
     "work experience",
     "experience",
+    "expérience professionnelle",
+    "experience professionnelle",
+    "expériences professionnelles",
+    "experiences professionnelles",
+    "expérience",
     "projects",
+    "projets",
     "education",
+    "formation",
+    "études",
+    "etudes",
     "certifications",
     "languages",
+    "langues",
 }
 
 
@@ -278,24 +292,6 @@ def _looks_like_contextual_cv_skill(skill: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in suffixes)
 
 
-def _deterministic_markdown_name(source_text: str) -> Optional[str]:
-    """Recover a candidate name from a leading Markdown fixture heading."""
-
-    for line in source_text.splitlines()[:12]:
-        match = re.match(r"^#{1,3}\s+(.+?)\s*$", line.strip())
-        if not match:
-            continue
-        candidate = match.group(1).strip()
-        key = candidate.casefold()
-        words = candidate.split()
-        if key in _CV_SECTION_HEADINGS or not 2 <= len(words) <= 6:
-            return None
-        if re.search(r"[\d@|:/]", candidate):
-            return None
-        return candidate
-    return None
-
-
 def _deterministic_plain_name(source_text: str) -> Optional[str]:
     """Recover a name from the first plain-text column without guessing."""
 
@@ -338,13 +334,11 @@ def _deterministic_education_level(source_text: str) -> Optional[str]:
 
 
 def _engineering_programme_level(text: str) -> Optional[str]:
-    """Normalize five-year engineering programmes without inflating them.
+    """Return the level an explicit engineering programme leads to.
 
-    A completed engineering diploma (Tunisian/French ``cycle d'ingénieur``,
-    ``Diplôme d'Ingénieur``, ``Engineering Degree``) is Master-equivalent. A
-    programme that is still in progress ("expected", "student", future end
-    year) has not conferred that degree yet, so the candidate is reported at
-    the Bachelor level: honest for matching and never invents a diploma.
+    ``highest_education_level`` represents completed or in-progress study, as
+    documented by ``CVInfo``. Five-year engineering programmes therefore map
+    consistently to their Master-equivalent level.
     """
 
     programme = re.search(
@@ -355,17 +349,7 @@ def _engineering_programme_level(text: str) -> Optional[str]:
     )
     if not programme:
         return None
-    window = text[programme.start() : programme.start() + 400]
-    in_progress = re.search(
-        r"\b(?:expected|in progress|ongoing|student|candidate|currently)\b",
-        window,
-        re.IGNORECASE,
-    )
-    future_end = any(
-        int(year) > date.today().year
-        for year in re.findall(r"(?:-|–|—|to)\s*(\d{4})", window)
-    )
-    return "Bachelor" if in_progress or future_end else "Master"
+    return "Master"
 
 
 def _category_headings(skills: list[str], source_text: str) -> list[str]:
@@ -383,14 +367,16 @@ def _explicit_cv_skill_items(source_text: str) -> list[str]:
     """Extract items from plain-text or Markdown technical-skills sections."""
 
     match = re.search(
-        r"(?is)(?:^|\n)\s*#{0,6}\s*(?:technical\s+)?skills(?:\s*&\s*tools|\s+and\s+tools)?\s*\n(.*?)"
+        r"(?is)(?:^|\n)\s*#{0,6}\s*(?:(?:technical\s*)?skills"
+        r"|comp[eé]tences(?:\s+techniques)?)(?:\s*&\s*tools|\s+and\s+tools)?\s*\n(.*?)"
         # The section ends at the next heading of any kind: a Markdown heading
         # (project titles included), an uppercase plain-text heading, or a
         # known section name. Stopping only at known names let project bullets
         # such as "Features: multi-select wardrobe ..." pose as skill rows.
         r"(?=\n\s*#{1,6}\s+\S|\n\s*[A-Z][A-Z &/-]{3,}\s*\n|"
-        r"\n\s*(?:education|work experience|professional experience|experience|"
-        r"projects|certifications|languages)\s*\n|\Z)",
+        r"\n\s*(?:education|formation|[eé]tudes|work experience|professional experience|"
+        r"exp[eé]riences?(?:\s+professionnelles?)?|projects|projets|certifications|"
+        r"languages|langues)\s*\n|\Z)",
         source_text,
     )
     if not match:
@@ -416,7 +402,7 @@ def _explicit_cv_skill_items(source_text: str) -> list[str]:
                 continue
         if not values:
             continue
-        items.extend(part.strip() for part in values.split(","))
+        items.extend(part.strip() for part in re.split(r"\s*[,;·]\s*", values))
     return _clean_cv_skills(items, source_text)
 
 
@@ -445,6 +431,21 @@ _MONTH_NUMBERS = {
     "november": 11,
     "dec": 12,
     "december": 12,
+    "janvier": 1,
+    "février": 2,
+    "fevrier": 2,
+    "mars": 3,
+    "avril": 4,
+    "mai": 5,
+    "juin": 6,
+    "juillet": 7,
+    "août": 8,
+    "aout": 8,
+    "septembre": 9,
+    "octobre": 10,
+    "novembre": 11,
+    "décembre": 12,
+    "decembre": 12,
 }
 
 
@@ -456,7 +457,15 @@ _MONTH_PATTERN = "|".join(
 _CV_DATE_RANGE = re.compile(
     rf"\b({_MONTH_PATTERN})\.?\s+(\d{{4}})\s*"
     rf"(?:-|–|—|to)\s*"
-    rf"(?:(present|current)|({_MONTH_PATTERN})\.?\s+(\d{{4}}))\b",
+    rf"(?:(present|current|présent|aujourd['’]hui)|({_MONTH_PATTERN})\.?\s+(\d{{4}}))\b",
+    re.IGNORECASE,
+)
+
+
+_CV_NUMERIC_DATE_RANGE = re.compile(
+    r"\b(0?[1-9]|1[0-2])[/.-](\d{4})\s*"
+    r"(?:-|–|—|to|au)\s*"
+    r"(?:(present|current|présent|aujourd['’]hui)|(0?[1-9]|1[0-2])[/.-](\d{4}))\b",
     re.IGNORECASE,
 )
 
@@ -521,14 +530,17 @@ def _cv_experience_region(source_text: str) -> str:
     """Return the explicit work-experience section when one is identifiable."""
 
     start_match = re.search(
-        r"(?im)^\s*#{0,6}\s*(?:professional\s+|work\s+)?experience\s*$",
+        r"(?im)^\s*#{0,6}\s*(?:(?:professional\s+|work\s+)?experience|"
+        r"exp[eé]riences?(?:\s+professionnelles?)?)\s*$",
         source_text,
     )
     if not start_match:
         return ""
     tail = source_text[start_match.end():]
     end_match = re.search(
-        r"(?im)^\s*#{0,6}\s*(?:education|technical skills|skills|projects|certifications|languages)\s*$",
+        r"(?im)^\s*#{0,6}\s*(?:education|formation|[eé]tudes|technical skills|skills|"
+        r"comp[eé]tences(?:\s+techniques)?|projects|projets|certifications|"
+        r"languages|langues)\s*$",
         tail,
     )
     return tail[: end_match.start()] if end_match else tail
@@ -550,6 +562,19 @@ def _deterministic_experience_years(source_text: str) -> Optional[float]:
             end_month, end_year = today.month, today.year
         else:
             end_month = _MONTH_NUMBERS[match.group(4).casefold()]
+            end_year = int(match.group(5))
+        start = start_year * 12 + start_month - 1
+        end = end_year * 12 + end_month - 1
+        if end >= start:
+            intervals.append((start, end))
+
+    for match in _CV_NUMERIC_DATE_RANGE.finditer(region):
+        start_month = int(match.group(1))
+        start_year = int(match.group(2))
+        if match.group(3):
+            end_month, end_year = today.month, today.year
+        else:
+            end_month = int(match.group(4))
             end_year = int(match.group(5))
         start = start_year * 12 + start_month - 1
         end = end_year * 12 + end_month - 1

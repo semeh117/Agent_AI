@@ -23,7 +23,7 @@ stage/
 │   │   ├── agent1_support.py      Agent 1 ReAct foundation
 │   │   └── tools/                 Agent-facing adapters
 │   ├── parsing/                   PDF text extraction and parser schemas
-│   │   ├── agent2_document_extractor.py  Lightweight PyPDF extraction
+│   │   ├── agent2_document_extractor.py  Dual-view PyPDF extraction
 │   │   ├── agent2_cv_parser.py    CV prompt and extraction orchestration
 │   │   ├── agent2_cv_rules.py     Deterministic CV cleanup and metadata rules
 │   │   ├── agent2_job_parser.py   Job prompt and extraction orchestration

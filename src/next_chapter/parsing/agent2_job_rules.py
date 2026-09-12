@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Optional
+from typing import Optional
 
 from next_chapter.parsing.agent2_parser_common import (
     MAX_JOB_SKILLS,
     MIN_JOB_DESCRIPTION_CHARACTERS,
     _canonical_skill_key,
-    _evidence_map,
     _ground_atomic_skills,
     _skill_positions,
 )

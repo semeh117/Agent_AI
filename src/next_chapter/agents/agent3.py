@@ -413,6 +413,7 @@ def run_agent3_full_auto_from_pdf(
     cv_document = extract_cv_document_agent2(pdf_source)
     cv_info = extract_cv_info_agent2(
         cv_document.text,
+        layout_text=cv_document.layout_text,
         cache_identity=(
             f"{cv_document.extraction_version}:{cv_document.content_hash}"
         ),

@@ -12,7 +12,6 @@ from next_chapter.parsing.agent2_parser_common import (
     JOB_CACHE_VERSION,
     MAX_JOB_SKILLS,
     MAX_RAW_JOB_SKILLS,
-    MIN_JOB_DESCRIPTION_CHARACTERS,
     _cache_text,
     _canonical_skill_key,
     _evidence_map,
@@ -24,14 +23,12 @@ from next_chapter.parsing.agent2_job_rules import (
     _description_truncation_reason,
     _deterministic_required_experience_years,
     _education_levels,
-    _find_job_section_headings,
     _has_explicit_requirement_occurrence,
     _has_nonoptional_occurrence,
     _has_optional_occurrence,
     _job_regions,
     _lowest_education_level,
     _required_alternative_groups,
-    _sentence_around,
 )
 from next_chapter.parsing.job_parser import JobRequirements
 from next_chapter.storage.extraction_cache import get_cached, set_cached

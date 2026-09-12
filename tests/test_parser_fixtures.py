@@ -181,7 +181,7 @@ def test_linkedin_description_structure_is_preserved():
     )
 
 
-def test_agent2_hybrid_cv_metadata_rules():
+def test_agent2_cv_metadata_rules():
     from next_chapter.parsing.agent2_cv_parser import (
         _deterministic_education_level,
         _deterministic_experience_years,
@@ -205,11 +205,14 @@ Intercom   AI Engineer   Aug 2020 - Aug 2022
     assert 6.0 <= experience <= 6.5
 
 
-def test_agent2_hybrid_parser_corrects_metadata_and_keeps_methods():
+def test_agent2_dual_view_parser_corrects_metadata_and_keeps_methods():
     from next_chapter.parsing.agent2_cv_parser import extract_cv_info_agent2
 
+    prompts = []
+
     class FakeStructuredModel:
-        def invoke(self, _prompt):
+        def invoke(self, prompt):
+            prompts.append(prompt)
             return {
                 "full_name": "PROFILE SUMMARY",
                 "skills": ["Python"],
@@ -261,6 +264,8 @@ Senior AI Engineer
     assert 6.0 <= parsed.experience_years <= 6.5
     assert "function calling" in parsed.skills
     assert "retrieval-augmented generation" in parsed.skills
+    assert "SECOND VIEW OF THE SAME CV" in prompts[0]
+    assert layout in prompts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -318,11 +323,11 @@ def test_replayed_cv_removes_project_features_and_duplicates():
     assert len(skills) == len({s.casefold() for s in skills})
 
 
-def test_replayed_cv_reports_honest_education_titles_and_headline():
+def test_replayed_cv_reports_programme_level_titles_and_headline():
     cv = replay_cv()
-    # A 4th-year engineering cycle "graduating 2026 (expected)" has not
-    # conferred an engineering (Master-level) diploma yet.
-    assert cv["highest_education_level"] == "Bachelor"
+    # The field describes completed or in-progress study, so an integrated
+    # engineering programme maps to the Master-equivalent level it leads to.
+    assert cv["highest_education_level"] == "Master"
     # Only the dated internship counts as professional experience (2 months).
     assert cv["experience_years"] == 0.17
     # The headline is a target role, and "Summer Internship" is an employment
@@ -341,8 +346,8 @@ def test_engineering_programme_education_rules():
     from next_chapter.parsing.agent2_cv_parser import _deterministic_education_level
 
     assert _deterministic_education_level(
-        "Ecole X - Engineering Cycle, Data Science\n2022 - 2026 (expected)"
-    ) == "Bachelor"
+        "Ecole X - Engineering Cycle, Data Science\n2022 - 2027 (expected)"
+    ) == "Master"
     assert _deterministic_education_level(
         "Diplôme d'Ingénieur en Informatique, ENSI, 2018 - 2021"
     ) == "Master"
@@ -351,6 +356,25 @@ def test_engineering_programme_education_rules():
     ) == "Master"
     assert _deterministic_education_level("B.Sc. Computer Science 2020") == "Bachelor"
     assert _deterministic_education_level("Team summary and plans") is None
+
+
+def test_french_skill_sections_and_date_formats():
+    from next_chapter.parsing.agent2_cv_parser import _deterministic_experience_years
+    from next_chapter.parsing.agent2_cv_rules import _explicit_cv_skill_items
+
+    cv = """COMPÉTENCES
+Outils: Python; Docker · Kubernetes
+EXPÉRIENCE PROFESSIONNELLE
+Stage DevOps
+07/2024 - 08/2024
+Stage Data
+juillet 2025 - août 2025
+FORMATION
+Cycle d'ingénieur
+"""
+
+    assert _explicit_cv_skill_items(cv) == ["Python", "Docker", "Kubernetes"]
+    assert _deterministic_experience_years(cv) == 0.33
 
 
 def test_replayed_jobs_exclude_responsibility_duties_from_requirements():
@@ -458,11 +482,12 @@ def main() -> int:
     test_agent2_parser_postprocessing_rules()
     test_agent2_alternative_groups_are_local_and_explicit()
     test_linkedin_description_structure_is_preserved()
-    test_agent2_hybrid_cv_metadata_rules()
-    test_agent2_hybrid_parser_corrects_metadata_and_keeps_methods()
+    test_agent2_cv_metadata_rules()
+    test_agent2_dual_view_parser_corrects_metadata_and_keeps_methods()
     test_replayed_cv_removes_project_features_and_duplicates()
-    test_replayed_cv_reports_honest_education_titles_and_headline()
+    test_replayed_cv_reports_programme_level_titles_and_headline()
     test_engineering_programme_education_rules()
+    test_french_skill_sections_and_date_formats()
     test_replayed_jobs_exclude_responsibility_duties_from_requirements()
     test_replayed_jobs_keep_alternative_groups_local()
     test_job_region_fallback_never_scores_duties()

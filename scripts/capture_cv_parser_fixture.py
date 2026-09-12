@@ -65,7 +65,7 @@ def main() -> int:
             parser.error("cv_path is required unless --reparse-existing is used.")
         document = extract_cv_document_agent2(args.cv_path)
         raw_text = document.text
-        layout_text = document.text
+        layout_text = document.layout_text
         content_hash = document.content_hash
         extraction_version = document.extraction_version
         source_file = args.cv_path.name
