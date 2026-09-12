@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -73,6 +74,69 @@ class ProductTests(unittest.TestCase):
             resolve_part("telegram:run-1", 0, received=True, database_path=self.database)
             self.telegram()
             self.assertEqual(post.call_count, 1)
+
+    def test_gmail_service_uses_streamlit_token_secret(self):
+        import next_chapter.delivery.gmail as gmail
+
+        credentials = Mock(valid=True)
+        service = Mock()
+        token = json.dumps({"refresh_token": "test-refresh-token"})
+        with (
+            patch.dict(os.environ, {"GMAIL_TOKEN_JSON": token}),
+            patch.object(
+                gmail.Credentials,
+                "from_authorized_user_info",
+                return_value=credentials,
+            ) as load,
+            patch.object(gmail, "build", return_value=service) as build,
+        ):
+            self.assertIs(gmail._get_gmail_service(), service)
+
+        load.assert_called_once_with(
+            {"refresh_token": "test-refresh-token"},
+            gmail.SCOPES,
+        )
+        build.assert_called_once_with(
+            "gmail",
+            "v1",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+
+    def test_gmail_secret_refreshes_expired_token(self):
+        import next_chapter.delivery.gmail as gmail
+
+        credentials = Mock(
+            valid=False,
+            expired=True,
+            refresh_token="test-refresh-token",
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"GMAIL_TOKEN_JSON": json.dumps({"refresh_token": "test"})},
+            ),
+            patch.object(
+                gmail.Credentials,
+                "from_authorized_user_info",
+                return_value=credentials,
+            ),
+            patch.object(gmail, "Request", return_value="request") as request,
+            patch.object(gmail, "build", return_value=Mock()),
+        ):
+            gmail._get_gmail_service()
+
+        request.assert_called_once_with()
+        credentials.refresh.assert_called_once_with("request")
+
+    def test_gmail_secret_rejects_invalid_json(self):
+        import next_chapter.delivery.gmail as gmail
+
+        with (
+            patch.dict(os.environ, {"GMAIL_TOKEN_JSON": "not-json"}),
+            self.assertRaisesRegex(ValueError, "complete valid JSON"),
+        ):
+            gmail._credentials_from_secret()
 
     def workflow_fakes(self):
         import next_chapter.agents.agent2 as workflow

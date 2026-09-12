@@ -35,6 +35,11 @@ root. `app.py` is the small launcher; page code and CSS live under
 `src/next_chapter/ui/`. See [project structure](docs/project_structure.md)
 and [architecture](docs/architecture.md).
 
+The project disables Streamlit's source-file watcher in production. This keeps
+the Transformers package from probing optional image modules such as
+`torchvision`; code changes take effect after restarting the local app or after
+the next Cloud deployment.
+
 ## Configure a live run
 
 Edit `.env` using the role-specific provider and model settings in the example.
@@ -84,10 +89,14 @@ labelled inconclusive. Search/parser errors remain visible alongside valid resul
 
 ## Delivery and restart recovery
 
-Gmail: place a Desktop OAuth client file at `credentials.json`. The first delivery
-opens Google's consent flow and stores `token.json`. The app creates a draft
-addressed to the candidate's email; it does not send an application email.
-The `gmail.compose` OAuth scope also permits sending, although this code only creates drafts.
+Gmail locally: place a Desktop OAuth client file at `credentials.json`. The
+first delivery opens Google's consent flow and stores `token.json`. For this
+single-user app on Streamlit Cloud, authorize locally once and paste the entire
+`token.json` object into the root-level `GMAIL_TOKEN_JSON` secret. The loader
+refreshes expired access tokens in memory. The app creates a draft addressed to
+the candidate's email; it does not send an application email. The
+`gmail.compose` OAuth scope also permits sending, although this code only creates
+drafts.
 
 Telegram: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; message the bot first.
 Approval sends messages directly to that configured chat. Successful message

@@ -2,6 +2,9 @@
 address = "127.0.0.1"
 headless = true
 maxUploadSize = 10
+# Transformers exposes many optional vision modules. Disabling development-time
+# source watching prevents Streamlit Cloud from importing them during inspection.
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false

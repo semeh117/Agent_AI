@@ -9,11 +9,10 @@ This implementation creates drafts only, so the candidate can review them.
 The Gmail gmail.compose OAuth scope also permits sending; draft-only behavior
 is enforced by the API operation used here, not by that scope.
 
-Requires credentials.json (OAuth client, Desktop app type) in the
-project root — see project setup notes for how to generate one via
-Google Cloud Console. On first run, this opens a browser window for you
-to authorize; after that, a token.json is saved so you won't need to
-re-authorize every time (until the token expires or is revoked).
+Streamlit Cloud reads a previously authorized token from the
+``GMAIL_TOKEN_JSON`` secret. Local development can instead use
+credentials.json (OAuth client, Desktop app type) and token.json in the
+project root. The local first run opens a browser window for authorization.
 
 credentials.json and token.json are both secrets — already covered by
 .gitignore, never commit them.
@@ -21,6 +20,7 @@ credentials.json and token.json are both secrets — already covered by
 
 import base64
 import io
+import json
 import os
 import re
 from email.mime.application import MIMEApplication
@@ -45,6 +45,29 @@ CREDENTIALS_PATH = str(_PROJECT_ROOT / "credentials.json")
 TOKEN_PATH = str(_PROJECT_ROOT / "token.json")
 
 
+def _credentials_from_secret():
+    """Load one authorized-user token from a root-level Streamlit secret."""
+
+    raw_token = os.getenv("GMAIL_TOKEN_JSON", "").strip()
+    if not raw_token:
+        return None
+    try:
+        token_info = json.loads(raw_token)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "GMAIL_TOKEN_JSON must contain the complete valid JSON from token.json."
+        ) from exc
+    if not isinstance(token_info, dict):
+        raise ValueError("GMAIL_TOKEN_JSON must contain one JSON object.")
+    try:
+        return Credentials.from_authorized_user_info(token_info, SCOPES)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "GMAIL_TOKEN_JSON is not an authorized-user token. Authorize Gmail "
+            "locally and paste the complete token.json content into Streamlit Secrets."
+        ) from exc
+
+
 def _get_gmail_service():
     """
     Handles the OAuth flow: reuses a saved token.json if present and
@@ -52,27 +75,34 @@ def _get_gmail_service():
     authorization flow (using credentials.json) if this is the first
     run. Returns an authenticated Gmail API client.
     """
-    creds = None
-    if os.path.exists(TOKEN_PATH):
+    creds = _credentials_from_secret()
+    using_secret = creds is not None
+    if creds is None and os.path.exists(TOKEN_PATH):
         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if using_secret:
+                raise RuntimeError(
+                    "GMAIL_TOKEN_JSON cannot be refreshed. Authorize Gmail locally "
+                    "again and replace the Streamlit secret with the new token.json."
+                )
             if not os.path.exists(CREDENTIALS_PATH):
                 raise FileNotFoundError(
-                    f"{CREDENTIALS_PATH} not found in project root. "
-                    "Download it from Google Cloud Console > Credentials "
-                    "(OAuth client, Desktop app type) and place it here."
+                    "Gmail is not configured. On Streamlit Cloud, add the complete "
+                    "authorized token.json as GMAIL_TOKEN_JSON in App settings > "
+                    "Secrets. For local use, place credentials.json in the project root."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)  # opens a browser window
 
-        with open(TOKEN_PATH, "w", encoding="utf-8") as token_file:
-            token_file.write(creds.to_json())
+        if not using_secret:
+            with open(TOKEN_PATH, "w", encoding="utf-8") as token_file:
+                token_file.write(creds.to_json())
 
-    return build("gmail", "v1", credentials=creds)
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
 def _build_email_body(cv_info, ranked_jobs: list, cover_letter: str) -> str:
