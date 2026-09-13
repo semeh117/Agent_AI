@@ -37,14 +37,22 @@ DEFAULT_INTERVIEW_PDF_DIRECTORY = PROJECT_ROOT / "output" / "pdf"
 
 class InterviewQuestion(BaseModel):
     question: str = Field(min_length=5, max_length=500)
+    competency: str = Field(max_length=300)
     why_asked: str = Field(min_length=5, max_length=700)
+    job_connection: str = Field(max_length=700)
     answer_strategy: str = Field(min_length=5, max_length=1200)
     sample_answer: str = Field(min_length=10, max_length=2200)
     cv_evidence: list[str] = Field(min_length=1, max_length=5)
+    learning_plan: str = Field(max_length=700)
 
 
 class InterviewPreparationContent(BaseModel):
     role_summary: str = Field(min_length=20, max_length=1500)
+    role_family: str = Field(max_length=200)
+    primary_focus: str = Field(max_length=500)
+    key_competencies: list[str] = Field(max_length=6)
+    candidate_strengths: list[str] = Field(max_length=6)
+    primary_gaps: list[str] = Field(max_length=6)
     technical_questions: list[InterviewQuestion] = Field(min_length=5, max_length=5)
     gap_questions: list[InterviewQuestion] = Field(min_length=2, max_length=2)
     behavioral_questions: list[InterviewQuestion] = Field(min_length=3, max_length=3)
@@ -92,26 +100,64 @@ def _filename_part(value: str) -> str:
     return (cleaned or "interview")[:50].lower()
 
 
-def _question_story(question: InterviewQuestion, styles) -> list[Any]:
+def _question_story(
+    question: InterviewQuestion,
+    styles,
+    number: int | None = None,
+) -> list[Any]:
     evidence = "<br/>".join(
         f"- {_safe_text(item)}" for item in question.cv_evidence
     )
-    return [
-        CondPageBreak(48 * mm),
-        Paragraph(_safe_text(question.question), styles["Question"]),
+    details = []
+    if question.competency:
+        details.append(
+            Paragraph(
+                f"<b>What this tests:</b> {_safe_text(question.competency)}",
+                styles["BodyText"],
+            )
+        )
+    details.append(
         Paragraph(
             f"<b>Why it may be asked:</b> {_safe_text(question.why_asked)}",
             styles["BodyText"],
-        ),
+        )
+    )
+    if question.job_connection:
+        details.append(
+            Paragraph(
+                f"<b>Job connection:</b> {_safe_text(question.job_connection)}",
+                styles["BodyText"],
+            )
+        )
+    details.extend(
+        [
+            Paragraph(
+                f"<b>Answer strategy:</b> {_safe_text(question.answer_strategy)}",
+                styles["BodyText"],
+            ),
+            Paragraph(
+                f"<b>Practice answer:</b> {_safe_text(question.sample_answer)}",
+                styles["BodyText"],
+            ),
+            Paragraph(f"<b>CV evidence:</b><br/>{evidence}", styles["Evidence"]),
+        ]
+    )
+    if question.learning_plan:
+        details.append(
+            Paragraph(
+                f"<b>Learning plan:</b> {_safe_text(question.learning_plan)}",
+                styles["Evidence"],
+            )
+        )
+    return [
+        CondPageBreak(80 * mm),
         Paragraph(
-            f"<b>Answer strategy:</b> {_safe_text(question.answer_strategy)}",
-            styles["BodyText"],
+            _safe_text(
+                f"{number}. {question.question}" if number else question.question
+            ),
+            styles["Question"],
         ),
-        Paragraph(
-            f"<b>Sample answer:</b> {_safe_text(question.sample_answer)}",
-            styles["BodyText"],
-        ),
-        Paragraph(f"<b>CV evidence:</b><br/>{evidence}", styles["Evidence"]),
+        *details,
         Spacer(1, 4 * mm),
     ]
 
@@ -195,7 +241,7 @@ def render_interview_preparation_pdf(
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#5C6B73"))
-        canvas.drawString(18 * mm, 12 * mm, "Agent 2 - Interview Preparation")
+        canvas.drawString(18 * mm, 12 * mm, "Next Chapter - Interview Preparation")
         canvas.drawRightString(
             A4[0] - 18 * mm,
             12 * mm,
@@ -211,10 +257,10 @@ def render_interview_preparation_pdf(
         topMargin=18 * mm,
         bottomMargin=20 * mm,
         title=f"Interview Preparation - {application.job_title}",
-        author="Agent 2 Job Matching Assistant",
+        author="Next Chapter",
     )
     story: list[Any] = [
-        Paragraph("Interview Preparation Pack", styles["TitleCentered"]),
+        Paragraph("Interview Preparation Guide", styles["TitleCentered"]),
         Paragraph(
             f"<b>{_safe_text(application.job_title)}</b> at "
             f"{_safe_text(application.company)}",
@@ -255,26 +301,72 @@ def render_interview_preparation_pdf(
                 "Open the LinkedIn job posting</link>",
                 styles["BodyText"],
             ),
-            Paragraph("Role summary", styles["Section"]),
+            Paragraph("1. Role Snapshot", styles["Section"]),
             Paragraph(_safe_text(content.role_summary), styles["BodyText"]),
-            Paragraph("Technical questions", styles["Section"]),
         ]
     )
-    for question in content.technical_questions:
-        story.extend(_question_story(question, styles))
+    snapshot = []
+    if content.role_family:
+        snapshot.append(
+            [
+                Paragraph("Role family", styles["BodyText"]),
+                Paragraph(_safe_text(content.role_family), styles["BodyText"]),
+            ]
+        )
+    if content.primary_focus:
+        snapshot.append(
+            [
+                Paragraph("Primary focus", styles["BodyText"]),
+                Paragraph(_safe_text(content.primary_focus), styles["BodyText"]),
+            ]
+        )
+    if snapshot:
+        snapshot_table = Table(snapshot, colWidths=[35 * mm, 115 * mm])
+        snapshot_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                    ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#17324D")),
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F8FA")),
+                    ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2E8F0")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        story.extend([Spacer(1, 2 * mm), snapshot_table])
+    for heading, items in (
+        ("Key competencies", content.key_competencies),
+        ("Strongest alignments", content.candidate_strengths),
+        ("Primary gaps", content.primary_gaps),
+    ):
+        if items:
+            story.extend(
+                [
+                    Paragraph(heading, styles["Heading3"]),
+                    _plain_list_table(items, "-", styles),
+                ]
+            )
+    story.append(Paragraph("2. Technical Interview Questions", styles["Section"]))
+    for index, question in enumerate(content.technical_questions, start=1):
+        story.extend(_question_story(question, styles, index))
 
-    story.append(Paragraph("Gap questions", styles["Section"]))
-    for question in content.gap_questions:
-        story.extend(_question_story(question, styles))
+    story.append(Paragraph("3. Gap Questions", styles["Section"]))
+    for index, question in enumerate(content.gap_questions, start=1):
+        story.extend(_question_story(question, styles, index))
 
-    story.append(Paragraph("Behavioral questions", styles["Section"]))
-    for question in content.behavioral_questions:
-        story.extend(_question_story(question, styles))
+    story.append(Paragraph("4. Behavioral Questions", styles["Section"]))
+    for index, question in enumerate(content.behavioral_questions, start=1):
+        story.extend(_question_story(question, styles, index))
 
-    story.append(Paragraph("Questions to ask the interviewer", styles["Section"]))
+    story.append(Paragraph("5. Questions to Ask the Interviewer", styles["Section"]))
     story.append(_plain_list_table(content.questions_to_ask, "-", styles))
 
-    story.append(Paragraph("Preparation checklist", styles["Section"]))
+    story.append(Paragraph("6. Final Preparation Checklist", styles["Section"]))
     story.append(_plain_list_table(content.preparation_checklist, "[ ]", styles))
 
     document.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
@@ -307,6 +399,31 @@ def _candidate_prompt_profile(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _upgrade_stored_content(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add fields introduced after older preparation records were saved."""
+
+    upgraded = dict(payload)
+    upgraded.setdefault("role_family", "Not recorded")
+    upgraded.setdefault("primary_focus", "See the role summary below.")
+    upgraded.setdefault("key_competencies", [])
+    upgraded.setdefault("candidate_strengths", [])
+    upgraded.setdefault("primary_gaps", [])
+    for section in (
+        "technical_questions",
+        "gap_questions",
+        "behavioral_questions",
+    ):
+        questions = []
+        for item in upgraded.get(section, []):
+            question = dict(item)
+            question.setdefault("competency", "Not recorded")
+            question.setdefault("job_connection", "")
+            question.setdefault("learning_plan", "")
+            questions.append(question)
+        upgraded[section] = questions
+    return upgraded
+
+
 def _record_from_row(row: Any) -> InterviewPreparationRecord:
     envelope = json.loads(row["content_json"])
     return InterviewPreparationRecord(
@@ -314,7 +431,9 @@ def _record_from_row(row: Any) -> InterviewPreparationRecord:
         application_id=row["application_id"],
         provider=envelope["provider"],
         model=envelope["model"],
-        content=InterviewPreparationContent.model_validate(envelope["content"]),
+        content=InterviewPreparationContent.model_validate(
+            _upgrade_stored_content(envelope["content"])
+        ),
         pdf_path=envelope["pdf_path"],
         created_at=row["created_at"],
     )
@@ -323,8 +442,8 @@ def _record_from_row(row: Any) -> InterviewPreparationRecord:
 def _default_questions_to_ask(application: Any) -> list[str]:
     return [
         f"What would success in the {application.job_title} role look like after 90 days?",
-        f"What are the most important AI projects currently planned at {application.company}?",
-        "How does the team evaluate model quality, safety, latency, and cost?",
+        f"Which projects would this role contribute to first at {application.company}?",
+        "How does the team measure quality, reliability, and business impact?",
         "What are the largest technical challenges the person in this role will own?",
     ]
 
@@ -383,16 +502,106 @@ def get_interview_model_info() -> dict[str, str]:
     }
 
 
+def _role_interview_blueprint(application: Any) -> dict[str, Any]:
+    """Suggest distinct interview dimensions for the applied role family."""
+
+    title = str(application.job_title or "").casefold()
+    if any(
+        marker in title
+        for marker in ("data engineer", "analytics engineer", "etl developer")
+    ):
+        family = "Data Engineering"
+        areas = [
+            "data modeling and schema evolution",
+            "batch or streaming pipeline design",
+            "orchestration, idempotency, and backfills",
+            "data quality, lineage, and observability",
+            "scalability, reliability, and cost trade-offs",
+        ]
+    elif "data scientist" in title or "data science" in title:
+        family = "Data Science"
+        areas = [
+            "business problem framing and success metrics",
+            "statistics, experimentation, and uncertainty",
+            "feature engineering and prevention of data leakage",
+            "model selection, validation, and error analysis",
+            "communicating results and monitoring model impact",
+        ]
+    elif any(
+        marker in title
+        for marker in ("machine learning", "ml engineer", "ai engineer")
+    ):
+        family = "Machine Learning Engineering"
+        areas = [
+            "training data and evaluation design",
+            "model architecture and performance trade-offs",
+            "serving, latency, and scalable inference",
+            "MLOps, monitoring, drift, and reproducibility",
+            "failure handling and responsible AI safeguards",
+        ]
+    elif any(marker in title for marker in ("devops", "platform", "site reliability")):
+        family = "Platform and Reliability Engineering"
+        areas = [
+            "infrastructure design and automation",
+            "deployment strategy and rollback safety",
+            "observability, incident response, and SLOs",
+            "security, permissions, and secrets management",
+            "capacity, resilience, and cost trade-offs",
+        ]
+    elif any(
+        marker in title
+        for marker in ("software", "backend", "frontend", "full stack", "developer")
+    ):
+        family = "Software Engineering"
+        areas = [
+            "system and API design",
+            "data structures and implementation trade-offs",
+            "testing, debugging, and code quality",
+            "performance, security, and reliability",
+            "delivery, monitoring, and technical collaboration",
+        ]
+    else:
+        family = "Role-specific"
+        areas = [
+            "the role's primary domain responsibility",
+            "an end-to-end scenario from the job description",
+            "a difficult decision and its trade-offs",
+            "quality, validation, and failure handling",
+            "communication with the role's main stakeholders",
+        ]
+    return {"role_family": family, "technical_focus_areas": areas}
+
+
 def build_interview_prompt(application: Any, profile: dict[str, Any]) -> str:
     """Build the single grounded generation prompt shared by every caller."""
 
     matching = application.match_details.get("matching", [])[:30]
     missing = application.match_details.get("missing", [])[:30]
-    return f"""You create rigorous interview preparation for one real candidate and one real job.
+    blueprint = _role_interview_blueprint(application)
+    return f"""You are an expert technical interview coach creating structured content for one candidate-facing Interview Preparation Guide.
 
-Return exactly the requested structured object. Ground every sample answer in the candidate profile. Never invent an employer, project, achievement, number, technology, or education detail. If the candidate lacks evidence, say so honestly and propose how they should explain their learning plan. Treat missing skills as gaps, never as possessed skills.
+SOURCE OF TRUTH
+Use only the Candidate Profile, Job, Match Evidence, and Role Interview Blueprint below for candidate-specific facts. Never invent employers, projects, achievements, metrics, technologies, certifications, responsibilities, education, experience, or skills. A missing requirement must remain a gap. When direct evidence is absent, connect honest adjacent evidence to a credible learning plan instead of fabricating experience.
 
-Create exactly 5 technical questions, 2 gap questions, 3 behavioral questions, 4 questions for the interviewer, and a 5-item checklist. Include every field in the schema, especially questions_to_ask and preparation_checklist. Keep the role summary below 100 words. Keep each reason below 25 words, each answer strategy below 35 words, and each sample answer below 70 words. Include no more than two short CV evidence items per question. Sample answers must be concise first-person practice answers. Behavioral answers should use a Situation-Task-Action-Result structure when evidence permits.
+ROLE SNAPSHOT
+Infer the role family and primary interview focus from the job title and responsibilities. The actual job description takes priority over the blueprint. Fill role_family, primary_focus, and a role_summary under 100 words. Fill key_competencies from the job, candidate_strengths only from matching evidence, and primary_gaps only from missing evidence.
+
+TECHNICAL QUESTIONS
+Create exactly 5 distinct questions for this job. Prefer realistic scenarios, design decisions, debugging, trade-offs, validation, reliability, and practical problem solving. At least 3 job_connection fields must cite a recognizable responsibility or requirement from the posting. Cover the five blueprint areas without testing the same concept twice. Avoid questions reusable unchanged for unrelated jobs. For every question, fill competency, why_asked, job_connection, answer_strategy, cv_evidence, and a concise first-person sample_answer.
+
+For Data Science, cover problem framing, statistics or experimentation, leakage, model evaluation, and communication of results. For Data Engineering, cover data modeling, batch or streaming pipelines, orchestration and backfills, data quality, and scale or reliability. For another field, infer five equivalent dimensions from the posting.
+
+GAP AND BEHAVIORAL QUESTIONS
+Create exactly 2 gap questions tied to genuine missing or weak requirements. If Match Evidence contains fewer than two missing items, use explicit job requirements that the profile does not demonstrate and label them "not demonstrated" rather than claiming the candidate lacks the skill. Never invent a requirement. Name the gap or evidence uncertainty in job_connection, connect adjacent CV evidence when present, keep the sample answer honest, and provide a concrete learning_plan. Create exactly 3 behavioral questions tied to this job's responsibilities or working patterns. Use STAR only when the profile supports it; otherwise state which detail the candidate should prepare.
+
+FINAL SECTIONS
+Create exactly 4 thoughtful, role-specific questions_to_ask about expectations, challenges, priorities, collaboration, or success. Do not assume the company is an AI company. Create exactly 5 concrete preparation_checklist items prioritized for this candidate and job.
+
+OUTPUT RULES
+Return exactly one complete object matching the supplied schema. Include every field. Keep why_asked under 25 words, answer_strategy under 35 words, and sample_answer under 70 words. Use no more than two short cv_evidence items per question. Silently verify the item counts, job connections, first-person answers, grounding, and gap honesty before returning.
+
+ROLE INTERVIEW BLUEPRINT:
+{json.dumps(blueprint, ensure_ascii=False)}
 
 CANDIDATE PROFILE:
 {json.dumps(_candidate_prompt_profile(profile), ensure_ascii=False)}
@@ -451,6 +660,7 @@ def _fallback_interview_content(
         str(item)[:160] for item in (profile.get("skills") or []) if str(item)
     ]
     evidence_map = profile.get("skill_evidence") or {}
+    blueprint = _role_interview_blueprint(application)
 
     matched_topics: list[str] = []
     matched_evidence: dict[str, str] = {}
@@ -466,16 +676,9 @@ def _fallback_interview_content(
             evidence_map.get(via) or evidence_map.get(topic) or f"CV lists {via}."
         )
 
-    topics = matched_topics + [skill for skill in skills if skill not in matched_topics]
-    topics.extend(
-        [
-            "technical design",
-            "testing and reliability",
-            "deployment and monitoring",
-            "performance trade-offs",
-            "collaboration on technical work",
-        ]
-    )
+    topics = list(blueprint["technical_focus_areas"])
+    topics.extend(matched_topics)
+    topics.extend(skill for skill in skills if skill not in matched_topics)
     unique_topics = list(dict.fromkeys(topics))[:5]
 
     def evidence_for(topic: str) -> str:
@@ -489,10 +692,24 @@ def _fallback_interview_content(
             )
         )[:500]
 
+    question_stems = [
+        "Walk me through how you would approach {topic} for this role.",
+        "How would you design a solution for {topic}, and what trade-offs would you make?",
+        "What can go wrong with {topic}, and how would you diagnose it?",
+        "How would you validate {topic} before relying on the result?",
+        "What trade-offs would you consider when improving {topic}?",
+    ]
     technical = [
         InterviewQuestion(
-            question=f"How would you apply {topic} in this role?",
-            why_asked="This checks practical understanding of a relevant technical area.",
+            question=question_stems[index].format(topic=topic),
+            competency=topic,
+            why_asked=(
+                f"This checks practical {blueprint['role_family']} judgment in a "
+                "relevant area."
+            ),
+            job_connection=(
+                f"The {application.job_title} interview may evaluate {topic}."
+            ),
             answer_strategy=(
                 "Explain the problem, approach, trade-offs, validation, and result using "
                 "only experience supported by the CV."
@@ -502,15 +719,18 @@ def _fallback_interview_content(
                 "problem I faced, the choices I made, and how I verified the result."
             ),
             cv_evidence=[evidence_for(topic)],
+            learning_plan="",
         )
-        for topic in unique_topics
+        for index, topic in enumerate(unique_topics)
     ]
 
     gap_topics = (missing + ["an unfamiliar requirement", "a new team tool"])[:2]
     gaps = [
         InterviewQuestion(
             question=f"How would you close your experience gap in {topic}?",
+            competency="Honest gap management and learning agility",
             why_asked="This checks honesty, learning speed, and practical planning.",
+            job_connection=f"Identified missing or weak requirement: {topic}.",
             answer_strategy=(
                 "Acknowledge the gap, connect adjacent CV evidence, and give a concrete "
                 "learning and validation plan."
@@ -521,6 +741,10 @@ def _fallback_interview_content(
                 "small practical task and feedback from the team."
             ),
             cv_evidence=["No direct CV evidence; this is an identified job gap."],
+            learning_plan=(
+                f"Complete a focused {topic} learning task, build a small example, "
+                "and request feedback before the interview."
+            ),
         )
         for topic in gap_topics
     ]
@@ -534,7 +758,12 @@ def _fallback_interview_content(
     behavioral = [
         InterviewQuestion(
             question=question,
+            competency="Communication, ownership, and reflective problem solving",
             why_asked="This checks communication, ownership, and evidence-based reflection.",
+            job_connection=(
+                f"Behavioral preparation for responsibilities in the "
+                f"{application.job_title} role."
+            ),
             answer_strategy=(
                 "Use Situation, Task, Action, and Result. Choose a CV-backed example and "
                 "avoid adding unsupported metrics."
@@ -545,6 +774,7 @@ def _fallback_interview_content(
                 "the verified result and what I learned."
             ),
             cv_evidence=[primary_evidence],
+            learning_plan="",
         )
         for question in behavioral_prompts
     ]
@@ -553,9 +783,14 @@ def _fallback_interview_content(
         role_summary=(
             "Structured model generation was unavailable, so this recovery pack "
             f"prepares for the {application.job_title} role at {application.company} "
-            "using verified CV evidence, clear technical explanations, and honest "
-            "plans for identified skill gaps."
+            f"with a {blueprint['role_family']} focus, verified CV evidence, "
+            "role-specific technical judgment, and honest plans for skill gaps."
         ),
+        role_family=blueprint["role_family"],
+        primary_focus=", ".join(blueprint["technical_focus_areas"][:2]),
+        key_competencies=list(blueprint["technical_focus_areas"]),
+        candidate_strengths=matched_topics[:6],
+        primary_gaps=missing[:6],
         technical_questions=technical,
         gap_questions=gaps,
         behavioral_questions=behavioral,

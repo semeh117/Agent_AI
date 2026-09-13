@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,7 @@ from next_chapter.services.application_tracker import (  # noqa: E402
     update_application_status,
 )
 from next_chapter.services.interview_preparation import (  # noqa: E402
+    build_interview_prompt,
     generate_interview_content,
     generate_interview_preparation,
     list_interview_preparations,
@@ -47,6 +49,33 @@ EXPECTED_TABLES = {
     "graph_writes",
     "graph_blobs",
 }
+
+
+def test_interview_prompt_adapts_to_applied_role_family() -> None:
+    profile = {"skills": ["Python", "SQL"], "job_titles": ["Data Analyst"]}
+    common = {
+        "company": "Example",
+        "match_details": {"matching": [], "missing": []},
+        "final_score": 80.0,
+    }
+    data_engineering = SimpleNamespace(
+        **common,
+        job_title="Data Engineer",
+        description="Build ETL pipelines, maintain dbt models, and monitor quality.",
+    )
+    data_science = SimpleNamespace(
+        **common,
+        job_title="Data Scientist",
+        description="Design experiments and validate predictive models.",
+    )
+
+    engineering_prompt = build_interview_prompt(data_engineering, profile)
+    science_prompt = build_interview_prompt(data_science, profile)
+
+    assert '"role_family": "Data Engineering"' in engineering_prompt
+    assert "batch or streaming pipeline design" in engineering_prompt
+    assert '"role_family": "Data Science"' in science_prompt
+    assert "prevention of data leakage" in science_prompt
 
 
 def test_agent2_database_schema() -> None:
@@ -239,10 +268,17 @@ class _FakeStructuredInterview:
         def question(number: int, category: str) -> dict:
             return {
                 "question": f"{category} interview question {number}?",
+                "competency": f"{category} competency {number}",
                 "why_asked": "This checks relevant role knowledge.",
+                "job_connection": "The posting requires reliable production delivery.",
                 "answer_strategy": "Explain the approach and connect it to CV evidence.",
                 "sample_answer": "I would begin with the Python project stated in my CV and explain my decisions honestly.",
                 "cv_evidence": ["Python"],
+                "learning_plan": (
+                    "Build a small practice project and request feedback."
+                    if category == "Gap"
+                    else ""
+                ),
             }
 
         return {
@@ -250,6 +286,11 @@ class _FakeStructuredInterview:
                 "This AI Engineer role focuses on grounded production systems "
                 "and reliable Python delivery."
             ),
+            "role_family": "Machine Learning Engineering",
+            "primary_focus": "Reliable production AI systems",
+            "key_competencies": ["Python", "model evaluation", "reliability"],
+            "candidate_strengths": ["Python"],
+            "primary_gaps": ["Kubernetes"],
             "technical_questions": [
                 question(index, "Technical") for index in range(1, 6)
             ],
@@ -373,8 +414,12 @@ def test_agent2_interview_preparation_pdf() -> None:
         reader = PdfReader(pdf_path)
         assert len(reader.pages) >= 2
         extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
-        assert "Interview Preparation Pack" in extracted
-        assert "Technical questions" in extracted
+        assert "Interview Preparation Guide" in extracted
+        assert "1. Role Snapshot" in extracted
+        assert "Machine Learning Engineering" in extracted
+        assert "2. Technical Interview Questions" in extracted
+        assert "What this tests" in extracted
+        assert "Job connection" in extracted
         assert list_interview_preparations(
             application.application_id,
             database_path=database_path,
@@ -473,6 +518,7 @@ def test_agent2_interview_falls_back_after_repeated_schema_failure() -> None:
 
 
 def main() -> int:
+    test_interview_prompt_adapts_to_applied_role_family()
     test_agent2_database_schema()
     test_agent2_database_constraints()
     test_agent2_application_tracker()
@@ -480,7 +526,7 @@ def main() -> int:
     test_agent2_interview_recovers_missing_trailing_lists()
     test_agent2_interview_retries_empty_schema_failure()
     test_agent2_interview_falls_back_after_repeated_schema_failure()
-    print("Agent 2 SQLite and interview preparation tests: PASS (7/7)")
+    print("Agent 2 SQLite and interview preparation tests: PASS (8/8)")
     return 0
 
 if __name__ == "__main__":

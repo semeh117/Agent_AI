@@ -137,13 +137,20 @@ class _FakeStructuredInterview:
         def question(number: int, category: str) -> dict:
             return {
                 "question": f"{category} interview question {number}?",
+                "competency": f"{category} competency {number}",
                 "why_asked": "This checks relevant role knowledge.",
+                "job_connection": "The posting requires reliable production delivery.",
                 "answer_strategy": "Explain the approach and connect it to CV evidence.",
                 "sample_answer": (
                     "I would begin with the Python project stated in my CV and "
                     "explain my decisions honestly."
                 ),
                 "cv_evidence": ["Python"],
+                "learning_plan": (
+                    "Build a small practice project and request feedback."
+                    if category == "Gap"
+                    else ""
+                ),
             }
 
         return {
@@ -151,6 +158,11 @@ class _FakeStructuredInterview:
                 "This AI Engineer role focuses on grounded production systems "
                 "and reliable Python delivery."
             ),
+            "role_family": "Machine Learning Engineering",
+            "primary_focus": "Reliable production AI systems",
+            "key_competencies": ["Python", "model evaluation", "reliability"],
+            "candidate_strengths": ["Python"],
+            "primary_gaps": ["Kubernetes"],
             "technical_questions": [question(i, "Technical") for i in range(1, 6)],
             "gap_questions": [question(i, "Gap") for i in range(1, 3)],
             "behavioral_questions": [question(i, "Behavioral") for i in range(1, 4)],
