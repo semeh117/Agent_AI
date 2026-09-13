@@ -2,14 +2,27 @@
 import streamlit as st
 from uuid import uuid4
 from next_chapter.agents.agent2 import run_agent2_full_auto
+from next_chapter.agents.agent3 import run_agent3_full_auto
 from next_chapter.parsing.agent2_cv_parser import Agent2CVInfo
 from next_chapter.ui.support import provider_ready
-from next_chapter.ui.components import page_header, navigate, remember_result, show_error, match_card, delivery_panel
+from next_chapter.ui.components import (
+    delivery_panel,
+    match_card,
+    navigate,
+    page_header,
+    react_trace_panel,
+    remember_result,
+    show_error,
+)
 
 
 def matches_page():
-    page_header(1, "Make your next move a good fit.",
-                "Compare your strongest matches, understand the gaps, and prepare a letter you can make your own.")
+    page_header(
+        1,
+        "Make your next move a good fit.",
+        "Compare your strongest matches, understand the gaps, and prepare a "
+        "letter you can make your own.",
+    )
     profile = st.session_state.get("profile")
     sample = st.session_state.get("sample", False)
     if sample:
@@ -29,35 +42,112 @@ def matches_page():
         if st.button("Go to your profile →", type="primary"):
             navigate("Your profile")
         return
-    with st.expander("Search preferences", expanded="result" not in st.session_state):
+    with st.expander(
+        "Search preferences",
+        expanded="result" not in st.session_state,
+    ):
         with st.form("search"):
-            query = st.text_input("Target role or search query (optional)", placeholder="e.g. Junior Python developer")
-            location = st.text_input("Location", placeholder="City, country, or leave blank")
+            workflow = st.radio(
+                "Search workflow",
+                ["Agent 2 · LangGraph", "Agent 3 · ReAct"],
+                horizontal=True,
+                help=(
+                    "Agent 2 follows a checkpointed production graph. Agent 3 "
+                    "chooses its next tool from each ReAct observation."
+                ),
+            )
+            query = st.text_input(
+                "Target role or search query (optional)",
+                placeholder="e.g. Junior Python developer",
+            )
+            location = st.text_input(
+                "Location",
+                placeholder="City, country, or leave blank",
+            )
             left, right = st.columns(2)
             count = left.slider("Recommendations to show", 1, 10, 3)
             pool = right.slider("Job postings to consider", 1, 10, 3)
-            st.caption("Larger searches take longer and use more parser calls. Searches cover the last 30 days.")
-            ready = bool(profile and st.session_state.get("profile_confirmed") and not sample)
+            st.caption(
+                "Larger searches take longer and use more parser calls. "
+                "Searches cover the last 30 days."
+            )
+            ready = bool(
+                profile
+                and st.session_state.get("profile_confirmed")
+                and not sample
+            )
             if not ready:
                 st.info("Review and save your profile before starting a live search.")
-            if not provider_ready("parser") or not provider_ready("cover_letter"):
-                st.info("Configure the parser and cover-letter provider keys in .env to search.")
-            search = st.form_submit_button("Find my matches", type="primary", disabled=not ready or
-                    not provider_ready("parser") or not provider_ready("cover_letter"))
+            agent_role = "agent3" if workflow.startswith("Agent 3") else "agent"
+            providers_ready = all(
+                provider_ready(role)
+                for role in ("parser", "cover_letter", agent_role)
+            )
+            if not providers_ready:
+                st.info(
+                    "Configure the parser, workflow-agent, and cover-letter "
+                    "provider keys before searching."
+                )
+            search = st.form_submit_button(
+                "Find my matches",
+                type="primary",
+                disabled=not ready or not providers_ready,
+            )
         if search:
             workflow_id = str(uuid4())
-            st.query_params["workflow"] = workflow_id
             try:
                 with st.status("Searching for your next role…", expanded=True) as progress:
-                    labels = {"load_cv": "Profile loaded", "build_query": "Search query ready",
-                        "match_jobs": "Job pool parsed and ranked", "persist_recommendations": "Matches saved",
-                        "generate_cover_letter": "Cover letter ready", "finalize": "Search finished"}
-                    result = run_agent2_full_auto(Agent2CVInfo.model_validate(profile),
-                        results_count=count, location=location, query=query, search_pool_size=max(pool, count),
-                        interactive_delivery=False, workflow_id=workflow_id,
-                        on_progress=lambda node: st.write(labels.get(node, node.replace("_", " ").capitalize())))
-                    progress.update(label="Matches ready" if result.get("ranked_jobs") else "Search finished",
-                                    state="error" if result.get("error") else "complete", expanded=False)
+                    cv_info = Agent2CVInfo.model_validate(profile)
+                    if workflow.startswith("Agent 3"):
+                        st.write("Agent 3 is running its ReAct action/observation loop.")
+                        result = run_agent3_full_auto(
+                            cv_info,
+                            results_count=count,
+                            location=location,
+                            query=query,
+                            search_pool_size=max(pool, count),
+                            workflow_id=workflow_id,
+                            verbose=False,
+                        )
+                    else:
+                        labels = {
+                            "load_cv": "Profile loaded",
+                            "build_query": "Search query ready",
+                            "match_jobs": "Job pool parsed and ranked",
+                            "persist_recommendations": "Matches saved",
+                            "generate_cover_letter": "Cover letter ready",
+                            "finalize": "Search finished",
+                        }
+                        result = run_agent2_full_auto(
+                            cv_info,
+                            results_count=count,
+                            location=location,
+                            query=query,
+                            search_pool_size=max(pool, count),
+                            interactive_delivery=False,
+                            workflow_id=workflow_id,
+                            on_progress=lambda node: st.write(
+                                labels.get(
+                                    node,
+                                    node.replace("_", " ").capitalize(),
+                                )
+                            ),
+                        )
+                        result["workflow_type"] = "agent2"
+                    progress.update(
+                        label=(
+                            "Matches ready"
+                            if result.get("ranked_jobs")
+                            else "Search finished"
+                        ),
+                        state=(
+                            "error"
+                            if result.get("error")
+                            or result.get("status") == "incomplete"
+                            else "complete"
+                        ),
+                        expanded=False,
+                    )
                 st.session_state.sample = False
                 remember_result(result)
             except Exception as exc:
@@ -76,6 +166,20 @@ def matches_page():
     columns[0].metric("Matches", len(jobs))
     columns[1].metric("Jobs evaluated", info.get("parsed_count", 0))
     columns[2].metric("Skipped", info.get("skipped_count", 0))
+    react_trace_panel(result)
+    if (
+        result.get("workflow_type") == "agent3"
+        and result.get("skill_gap_analysis")
+    ):
+        gaps = result["skill_gap_analysis"]
+        with st.expander("Recurring skill gaps"):
+            recurring = gaps.get("recurring_missing_skills", [])
+            if recurring:
+                for item in recurring:
+                    st.write(f"• {item['skill']} · missing from {item['jobs']} jobs")
+            else:
+                st.write("No missing skill recurred across multiple ranked jobs.")
+            st.caption(gaps.get("recommendation", ""))
     if info.get("skipped_jobs"):
         with st.expander("Why some postings were skipped"):
             for job in info["skipped_jobs"]:

@@ -1,166 +1,177 @@
-"""Agent 3: complete CV-to-LinkedIn matching and delivery workflow.
+"""Agent 3: a classic ReAct CV-to-LinkedIn workflow.
 
-The public full-auto entry point parses the CV, lets the orchestration model
-build one LinkedIn query, then scrapes, parses, scores, and ranks the jobs.
-The agent's native tool loop generates a cover letter for the true top score,
-asks the user to choose Gmail or Telegram, and calls the selected delivery tool.
-Ranked jobs are saved to the shared Agent 2 application tracker inside the
-matching tool. Interview preparation is a separate, user-triggered request
-(``run_agent3_interview_preparation``) that shares Agent 2's service code.
+Agent 3 exposes scraping, evaluation, skill-gap analysis, and cover-letter
+generation as separate actions. The model follows the textual
+Thought/Action/Action Input/Observation protocol provided by LangChain's
+``create_react_agent``. Delivery remains an application-level action performed
+only after the user supplies a Gmail or Telegram choice.
 """
 
-import json
+from __future__ import annotations
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from copy import deepcopy
+from typing import Any
+from uuid import uuid4
+
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.prompts import PromptTemplate
 
 import next_chapter.agents.tools.cover_letter as cover_letter_tool
-import next_chapter.agents.tools.delivery_choice as delivery_choice
-import next_chapter.agents.tools.job_evaluator as job_evaluator
-from next_chapter.agents.tools.cover_letter import write_cover_letter
-from next_chapter.agents.tools.delivery_choice import ask_user_delivery_channel
-from next_chapter.agents.tools.gmail import send_results_draft
 import next_chapter.agents.tools.interview_preparation as interview_tool
-from next_chapter.agents.tools.interview_preparation import generate_interview_preparation_pdf
-from next_chapter.agents.tools.linkedin_match_tool import (
-    get_last_match_result,
-    get_last_tracked_applications,
-    match_linkedin_jobs_for_agent,
-    set_candidate_profile,
-    sync_linkedin_results_for_shared_tools,
+import next_chapter.agents.tools.job_evaluator as job_evaluator
+from next_chapter.agents.react_output_parser import (
+    RequiredToolsVerifyingParser,
+    TolerantReActSingleInputOutputParser,
 )
-from next_chapter.agents.tools.telegram_tool import send_results_telegram
-from next_chapter.config import get_agent_llm
-
-
-def _reset_agent3_completion_state(cv_info, delivery_channel: str | None = None) -> None:
-    """Reset shared tool state before one isolated Agent 3 run."""
-
-    job_evaluator.set_candidate_profile(cv_info)
-    cover_letter_tool._last_cover_letter = None
-    cover_letter_tool._last_cover_letter_job = None
-    delivery_choice._last_delivery_channel = delivery_channel
-    interview_tool.reset_interview_preparation_state()
-
-
-TOOLS = [
-    match_linkedin_jobs_for_agent,
-    write_cover_letter,
-    ask_user_delivery_channel,
-    send_results_draft,
-    send_results_telegram,
+from next_chapter.agents.tools.agent3_react_tools import (
+    Agent3RunContext,
+    build_agent3_react_tools,
+)
+from next_chapter.agents.tools.interview_preparation import (
     generate_interview_preparation_pdf,
-]
+)
+from next_chapter.config import get_agent3_llm
 
 
-AGENT3_SYSTEM_PROMPT = """You are an expert career-matching and delivery assistant. Complete
-the entire LinkedIn workflow through the provided tools. Do not end after ranking.
+AGENT3_TOOL_NAMES = (
+    "search_linkedin_jobs",
+    "evaluate_linkedin_results",
+    "analyze_skill_gaps",
+    "write_cover_letter_for_job",
+)
 
-## Required workflow
 
-1. Study the candidate profile carefully.
-2. Build one concise LinkedIn query containing:
-   - one realistic target job title supported by the CV;
-   - up to three of the candidate's strongest relevant skills.
-3. Call `match_linkedin_jobs_for_agent` exactly once.
-4. Pass the plain query in the tool's `query` argument. Do not include the
-   location, result count, explanations, markdown, or quotation marks.
-5. Read the returned JSON observation. The tool has already scraped LinkedIn,
-   parsed every usable job, calculated all scores, sorted the jobs, and saved
-   them to the application tracker (`tracked_applications`). Do not call any
-   tool to save them again.
-6. Do not recalculate scores and do not change the returned ranking order.
-7. If the matching observation contains an `error`, report it honestly and stop.
-8. If at least one job was ranked, call `write_cover_letter` exactly once for
-   the first job in the returned ranking. Pass that job's URL directly in the
-   tool's `url` argument, for example `{{"url": "https://..."}}`. Do not use
-   `evaluated_job_json`. The shared tool recovers the complete stored LinkedIn
-   job and uses the dedicated writer.
-9. After the cover letter succeeds, call `ask_user_delivery_channel` exactly
-   once. Pass an empty string and wait for its Gmail or Telegram choice.
-10. Call exactly one matching delivery tool:
-    - Gmail: `send_results_draft`
-    - Telegram: `send_results_telegram`
-    Pass an empty string. Never call both delivery tools.
-11. If any completion or delivery tool returns an error, report it honestly.
-    Never claim that a letter, draft, or message exists unless its tool
-    observation explicitly confirms success.
+AGENT3_REACT_PROMPT = """You are an expert career-matching assistant. Use a
+classic ReAct loop to find and evaluate LinkedIn jobs for the candidate and
+write one grounded cover letter for the best valid match.
 
-## Optional interview preparation (user-triggered only)
+You have access to these tools:
 
-`generate_interview_preparation_pdf` is NOT part of the workflow above. Call it
-only when the user's message explicitly asks for interview preparation for one
-saved application and provides its `application_id`. Never call it during the
-job-search, cover-letter, or delivery steps, and never call it for every ranked
-job. Never claim an interview PDF exists unless its observation contains
-`pdf_path`. When the user asks only for interview preparation, call that tool
-exactly once and report its result; do not run the LinkedIn workflow.
+{tools}
 
-## Scoring contract
+Use this exact format:
 
-The tool calculates:
+Question: the request you must complete
+Thought: briefly state what evidence or action is needed next
+Available Action names: {tool_names}
+Action: write exactly one available action name, with no explanation
+Action Input: one plain-text input for that tool
+Observation: the real tool result
+... repeat Thought/Action/Action Input/Observation as needed
+Thought: I now know the final answer
+Final Answer: a concise factual result based only on tool observations
+
+Required workflow:
+
+1. Build a concise query from one realistic role and up to three strong skills.
+2. Call search_linkedin_jobs. Its input is only the plain query.
+3. Inspect the returned titles. A second, refined search is allowed only when
+   the first result set is empty, too small, or clearly irrelevant. Never make
+   more than two searches.
+4. Call evaluate_linkedin_results exactly once after the final search. Pass
+   the word none as its input. The tool parses requirements, calculates the
+   existing skill/experience/education scores, ranks jobs, and saves them.
+5. Preserve the returned ranking and scores. Never calculate your own scores.
+6. If ranked jobs exist, call analyze_skill_gaps exactly once with the word
+   none, then call write_cover_letter_for_job exactly once with only the URL
+   of the first ranked job.
+7. If a tool returns an error, report it honestly. Never claim an action
+   succeeded unless its Observation confirms success.
+8. Delivery is outside this ReAct loop. Do not ask for Gmail or Telegram and
+   do not claim anything was delivered.
+
+Scoring contract:
 
 final_score = skills_score * 0.5
             + experience_score * 0.3
             + education_score * 0.2
 
-`skills_score` is the percentage of scored required-skill units satisfied.
-Exact, reviewed alias, ESCO-concept, and thresholded embedding-cosine decisions
-can satisfy each unit. It is not one global CV/job cosine value. Experience and
-education are deterministic eligibility scores. Use only returned values.
+An unspecified experience or education requirement receives no penalty, but
+it is not a verified match. ESCO normalization counts describe vocabulary
+coverage, not candidate-job matches.
 
-ESCO ``candidate_mapped`` and ``required_mapped`` values describe coverage of
-the ESCO vocabulary only. Never describe them as candidate-job matches. When
-experience or education has a ``No ... requirement stated`` note, its 100 score
-means no penalty was applied; call the requirement "not specified", never a
-strong or verified match.
+In the Final Answer, preserve ranking order and include title, company, final
+score, component scores, URL, application_id when available, and the strongest
+match or biggest constraint. Summarize recurring skill gaps from the tool's
+observation and confirm which job received the cover letter.
 
-Never provide the final answer before completing all applicable tool calls and
-reading every observation.
+Never put an Action and a Final Answer in the same response. Stop after one
+Action Input and wait for its Observation.
 
-## Final answer requirements
+Your first response must follow this shape (choose the query from the actual
+candidate profile):
+Thought: I need to search for relevant LinkedIn jobs.
+Action: search_linkedin_jobs
+Action Input: Data Scientist Python scikit-learn XGBoost
 
-For every ranked job, include:
+Begin.
 
-1. Rank
-2. Job title and company
-3. Final score
-4. Skills, experience, and education component scores
-5. Job URL
-6. The tracker `application_id` when `tracked_applications` provides one
-7. A concise factual note about the strongest match or biggest constraint
-
-Mention skipped or inconclusive jobs when the tool reports them, and mention a
-`persistence_warning` if present. Confirm which top job received the cover
-letter and whether Gmail or Telegram delivery succeeded. Keep the answer
-concise and preserve descending `final_score` order."""
+Question: {input}
+Thought:{agent_scratchpad}"""
 
 
-def build_agent3_prompt() -> ChatPromptTemplate:
-    """Build and validate Agent 3's native tool-calling prompt."""
+INTERVIEW_REACT_PROMPT = """You prepare an interview pack for one saved job.
 
-    return ChatPromptTemplate.from_messages(
-        [
-            ("system", AGENT3_SYSTEM_PROMPT),
-            ("human", "{input}"),
-            MessagesPlaceholder("agent_scratchpad"),
-        ]
-    )
+Tools:
+{tools}
+
+Use this exact format:
+Question: the request
+Thought: what action is required
+Available Action names: {tool_names}
+Action: write exactly one available action name
+Action Input: the saved application ID
+Observation: the real tool result
+Thought: I now know the final answer
+Final Answer: report the job, company, PDF path, provider, and model, or the
+error returned by the tool
+
+Call generate_interview_preparation_pdf exactly once. Do not claim that a PDF
+exists unless the Observation contains a pdf_path.
+
+Question: {input}
+Thought:{agent_scratchpad}"""
 
 
-def build_agent3_executor(verbose: bool = True) -> AgentExecutor:
-    """Create Agent 3's native tool-calling executor."""
+def _reset_agent3_state(cv_info: Any) -> None:
+    """Reset shared legacy service state used by cover and delivery adapters."""
 
-    llm = get_agent_llm(temperature=0.0)
-    prompt = build_agent3_prompt()
-    agent = create_tool_calling_agent(
-        llm=llm,
-        tools=TOOLS,
-        prompt=prompt,
+    job_evaluator.set_candidate_profile(cv_info)
+    cover_letter_tool._last_cover_letter = None
+    cover_letter_tool._last_cover_letter_job = None
+    interview_tool.reset_interview_preparation_state()
+
+
+def build_agent3_prompt() -> PromptTemplate:
+    """Build Agent 3's textual Thought/Action/Observation prompt."""
+
+    return PromptTemplate.from_template(AGENT3_REACT_PROMPT)
+
+
+def build_agent3_executor(
+    context: Agent3RunContext,
+    verbose: bool = True,
+) -> AgentExecutor:
+    """Create Agent 3's classic ReAct executor for one isolated run."""
+
+    tools = build_agent3_react_tools(context)
+    agent = create_react_agent(
+        llm=get_agent3_llm(temperature=0.0),
+        tools=tools,
+        prompt=build_agent3_prompt(),
+        output_parser=RequiredToolsVerifyingParser(
+            required_tools={"analyze_skill_gaps", "write_cover_letter_for_job"},
+            only_if_any={"evaluate_linkedin_results"},
+            tool_aliases={
+                "search_linkinned_jobs": "search_linkedin_jobs",
+                "search_linked_in_jobs": "search_linkedin_jobs",
+            },
+            valid_tools=AGENT3_TOOL_NAMES,
+        ),
     )
     return AgentExecutor(
         agent=agent,
-        tools=TOOLS,
+        tools=tools,
         verbose=verbose,
         handle_parsing_errors=True,
         max_iterations=8,
@@ -168,22 +179,14 @@ def build_agent3_executor(verbose: bool = True) -> AgentExecutor:
     )
 
 
-def run_agent3_job_matching(
-    cv_info,
-    results_count: int = 3,
-    location: str = "",
-) -> dict:
-    """Run Agent 3 with an already-parsed ``CVInfo`` object."""
-
-    set_candidate_profile(
-        cv_info,
-        location=location,
-        results_count=results_count,
-    )
-    executor = build_agent3_executor(verbose=True)
-
+def _profile_question(
+    cv_info: Any,
+    results_count: int,
+    location: str,
+    query: str = "",
+) -> str:
     profile_summary = (
-        f"Most recent title: "
+        "Most recent title: "
         f"{cv_info.job_titles[0] if cv_info.job_titles else 'N/A'}. "
         f"Other roles: {', '.join(cv_info.job_titles[1:5]) or 'N/A'}. "
         f"Key skills: {', '.join(cv_info.skills[:15])}. "
@@ -191,232 +194,246 @@ def run_agent3_job_matching(
         f"Education: {cv_info.highest_education_level or 'N/A'}. "
         f"Requested location: {location or 'any location'}."
     )
-    question = (
-        f"Here is the candidate's profile:\n{profile_summary}\n\n"
-        f"Find up to {results_count} LinkedIn jobs matching this profile and "
-        "complete the full workflow: rank them, write one cover letter for the "
-        "true top job, ask me to choose Gmail or Telegram, and deliver it."
+    requested_query = str(query or "").strip()
+    query_instruction = (
+        f"The user supplied this search query; use it exactly for the first "
+        f"search: {requested_query}. "
+        if requested_query
+        else "Build the first search query from the candidate profile. "
     )
-    return executor.invoke({"input": question})
+    return (
+        f"Here is the candidate's profile:\n{profile_summary}\n\n"
+        f"{query_instruction}"
+        f"Find up to {results_count} LinkedIn jobs, evaluate and rank them, "
+        "analyze recurring skill gaps, and write one cover letter for the "
+        "first valid ranked job."
+    )
 
 
-def complete_agent3_delivery(
-    agent_result: dict,
-    cv_info,
-    match_result: dict,
-    delivery_channel: str | None = None,
-) -> dict:
-    """Verify the agent completed its tool workflow and repair missed calls.
+def _react_trace(agent_result: dict[str, Any]) -> list[dict[str, str]]:
+    """Return an auditable action/observation trace without model thoughts."""
 
-    Normal execution has already generated and delivered inside the agent's
-    native tool loop. This deterministic guard never duplicates a successful
-    delivery; it only performs a tool call the model omitted.
+    return [
+        {
+            "tool": str(action.tool),
+            "input": str(action.tool_input),
+            "observation": str(observation),
+        }
+        for action, observation in agent_result.get("intermediate_steps", [])
+    ]
+
+
+def _normalize_delivery_channel(value: str | None) -> str | None:
+    if value is None:
+        return None
+    aliases = {"email": "gmail", "mail": "gmail", "tg": "telegram"}
+    channel = str(value).strip().casefold()
+    channel = aliases.get(channel, channel)
+    if channel not in {"gmail", "telegram"}:
+        raise ValueError("delivery_channel must be 'gmail' or 'telegram'.")
+    return channel
+
+
+def _finalize_agent3_result(
+    agent_result: dict[str, Any],
+    context: Agent3RunContext,
+) -> dict[str, Any]:
+    """Validate the ReAct run and expose it for a later approved delivery.
+
+    This function never repairs missing ReAct actions. It only attaches the
+    ground-truth tool state and reports validation failures.
     """
 
-    ranked_jobs = sorted(
-        match_result.get("ranked_jobs", []),
-        key=lambda job: (bool(job.get("inconclusive")), -float(job["final_score"])),
-    )
+    match_result = context.match_result or {}
+    ranked_jobs = list(match_result.get("ranked_jobs", []))
     agent_result["ranked_jobs"] = ranked_jobs
-    # Tracker rows were written deterministically inside the matching tool.
-    agent_result["tracked_applications"] = match_result.get(
-        "tracked_applications", get_last_tracked_applications()
+    agent_result["tracked_applications"] = list(
+        match_result.get("tracked_applications", [])
     )
     agent_result["candidate_id"] = match_result.get("candidate_id", "")
+    agent_result["match_result"] = match_result
+    agent_result["workflow_type"] = "agent3"
+    agent_result["skill_gap_analysis"] = context.skill_gap_analysis
+    agent_result["react_trace"] = _react_trace(agent_result)
     if match_result.get("persistence_warning"):
         agent_result["persistence_warning"] = match_result["persistence_warning"]
-    sync_linkedin_results_for_shared_tools(
-        {**match_result, "ranked_jobs": ranked_jobs}
+
+    called = [step["tool"] for step in agent_result["react_trace"]]
+    required = ["search_linkedin_jobs", "evaluate_linkedin_results"]
+    if ranked_jobs:
+        required.extend(["analyze_skill_gaps", "write_cover_letter_for_job"])
+    missing = [name for name in required if name not in called]
+
+    order_error = False
+    if not missing:
+        positions = [called.index(name) for name in required]
+        order_error = positions != sorted(positions)
+
+    top_job = ranked_jobs[0] if ranked_jobs else None
+    cover_job = cover_letter_tool._last_cover_letter_job
+    cover_matches_top = bool(
+        top_job
+        and cover_job
+        and str(cover_job.get("url") or "") == str(top_job.get("url") or "")
+        and cover_letter_tool._last_cover_letter
     )
+    if (
+        ranked_jobs
+        and not cover_matches_top
+        and "write_cover_letter_for_job" not in missing
+    ):
+        missing.append("write_cover_letter_for_job_for_top_ranked_job")
+
+    validation_ok = not missing and not order_error
+    agent_result["react_validation"] = {
+        "status": "passed" if validation_ok else "failed",
+        "called_tools": called,
+        "missing_tools": missing,
+        "order_valid": not order_error,
+    }
+    agent_result["cover_letter"] = (
+        cover_letter_tool._last_cover_letter if cover_matches_top else None
+    )
+    if cover_matches_top and top_job:
+        agent_result["cover_letter_job"] = {
+            "job_title": top_job.get("job_title", ""),
+            "company": top_job.get("company", ""),
+            "url": top_job.get("url", ""),
+            "final_score": top_job.get("final_score", 0.0),
+        }
+
+    if not validation_ok:
+        agent_result["status"] = "incomplete"
+        agent_result["delivery"] = {
+            "status": "skipped",
+            "error": "The ReAct workflow did not complete its required actions.",
+        }
+        return agent_result
 
     if not ranked_jobs:
-        agent_result["cover_letter"] = None
+        agent_result["status"] = "completed"
         agent_result["delivery"] = {
             "status": "skipped",
             "error": "No ranked LinkedIn job was available.",
         }
-        agent_result["output"] += (
-            "\n\nNo cover letter or delivery was possible because no job was ranked."
-        )
         return agent_result
 
-    top_job = ranked_jobs[0]
-    top_identity = (top_job.get("job_title"), top_job.get("company"), top_job.get("url"))
-    cover_identity = None
-    if cover_letter_tool._last_cover_letter_job:
-        cover_identity = (
-            cover_letter_tool._last_cover_letter_job.get("job_title"),
-            cover_letter_tool._last_cover_letter_job.get("company"),
-            cover_letter_tool._last_cover_letter_job.get("url"),
-        )
-    if cover_letter_tool._last_cover_letter is None or cover_identity != top_identity:
-        cover_reference = {"url": top_job.get("url", "")}
-        if not cover_reference["url"]:
-            cover_reference = {
-                "title": top_job.get("job_title", ""),
-                "company": top_job.get("company", ""),
-            }
-        cover_observation = write_cover_letter.func(
-            json.dumps(cover_reference, ensure_ascii=False)
-        )
-    else:
-        cover_observation = "Cover letter was generated inside the agent tool loop."
-
-    if cover_letter_tool._last_cover_letter is None:
-        agent_result["cover_letter"] = None
-        agent_result["delivery"] = {
-            "status": "skipped",
-            "error": cover_observation,
-        }
-        agent_result["output"] += (
-            f"\n\nCover-letter generation failed for {top_job['job_title']} @ "
-            f"{top_job['company']}: {cover_observation}"
-        )
-        return agent_result
-
-    agent_result["cover_letter"] = cover_letter_tool._last_cover_letter
-    agent_result["cover_letter_job"] = {
-        "job_title": top_job["job_title"],
-        "company": top_job["company"],
-        "url": top_job.get("url", ""),
-        "final_score": top_job["final_score"],
-    }
-
-    aliases = {"email": "gmail", "mail": "gmail", "tg": "telegram"}
-    if delivery_channel is not None:
-        requested_channel = delivery_channel.strip().lower()
-        delivery_choice._last_delivery_channel = aliases.get(
-            requested_channel, requested_channel
-        )
-    if delivery_choice._last_delivery_channel not in {"gmail", "telegram"}:
-        channel_observation = ask_user_delivery_channel.func("")
-        if delivery_choice._last_delivery_channel not in {"gmail", "telegram"}:
-            raise ValueError(f"Invalid delivery choice returned: {channel_observation}")
-
-    delivery_channel = delivery_choice._last_delivery_channel
-    if delivery_channel not in {"gmail", "telegram"}:
-        raise ValueError("delivery_channel must be 'gmail' or 'telegram'.")
-
-    delivery_tool = (
-        "send_results_draft"
-        if delivery_channel == "gmail"
-        else "send_results_telegram"
-    )
-    successful_observation = None
-    for action, observation in agent_result.get("intermediate_steps", []):
-        if action.tool != delivery_tool:
-            continue
-        observation_text = str(observation)
-        if not observation_text.lstrip().lower().startswith("error:"):
-            successful_observation = observation_text
-
-    if successful_observation is None:
-        if delivery_channel == "gmail":
-            delivery_observation = send_results_draft.func("")
-        else:
-            delivery_observation = send_results_telegram.func("")
-    else:
-        delivery_observation = successful_observation
-
-    delivery_failed = str(delivery_observation).lstrip().lower().startswith("error:")
-    agent_result["delivery"] = {
-        "channel": delivery_channel,
-        "status": "failed" if delivery_failed else "completed",
-        "observation": delivery_observation,
-    }
-    if delivery_failed:
-        agent_result["delivery"]["error"] = delivery_observation
-    if agent_result["delivery"]["status"] != "completed":
-        agent_result["output"] += (
-            f"\n\nCover letter generated for {top_job['job_title']} @ "
-            f"{top_job['company']}, but {delivery_channel} delivery failed: "
-            f"{delivery_observation}"
-        )
-        return agent_result
-
-    confirmation = (
-        "Gmail draft created successfully."
-        if delivery_channel == "gmail"
-        else "Telegram results sent successfully."
-    )
-    agent_result["output"] += (
-        f"\n\nCover letter generated for {top_job['job_title']} @ "
-        f"{top_job['company']}. {confirmation}"
-    )
+    agent_result["status"] = "awaiting_delivery"
+    agent_result["delivery"] = {"status": "awaiting_choice"}
     return agent_result
 
 
+def _invoke_agent3(
+    cv_info: Any,
+    results_count: int,
+    location: str,
+    verbose: bool,
+    query: str = "",
+    search_pool_size: int | None = None,
+) -> tuple[dict[str, Any], Agent3RunContext]:
+    context = Agent3RunContext(
+        cv_info=cv_info,
+        location=location,
+        results_count=results_count,
+        search_pool_size=search_pool_size,
+    )
+    executor = build_agent3_executor(context, verbose=verbose)
+    question = _profile_question(
+        cv_info,
+        context.results_count,
+        context.location,
+        query=query,
+    )
+    try:
+        result = executor.invoke({"input": question})
+    except Exception as exc:
+        result = {
+            "output": f"Agent 3 stopped before completing the ReAct loop: {exc}",
+            "intermediate_steps": [],
+            "orchestration_error": f"{type(exc).__name__}: {exc}",
+        }
+    return result, context
+
+
+def run_agent3_job_matching(
+    cv_info: Any,
+    results_count: int = 3,
+    location: str = "",
+    verbose: bool = True,
+    query: str = "",
+    search_pool_size: int | None = None,
+    workflow_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the ReAct search/evaluate/gap/cover workflow without delivery."""
+
+    _reset_agent3_state(cv_info)
+    result, context = _invoke_agent3(
+        cv_info,
+        results_count,
+        location,
+        verbose,
+        query=query,
+        search_pool_size=search_pool_size,
+    )
+    result = _finalize_agent3_result(result, context)
+    result["workflow_id"] = workflow_id or str(uuid4())
+    result["cv_info"] = cv_info
+    return result
+
+
 def run_agent3_full_auto(
-    cv_info,
+    cv_info: Any,
     results_count: int = 3,
     location: str = "",
     delivery_channel: str | None = None,
-) -> dict:
-    """Run matching, cover generation, channel choice, and delivery."""
+    verbose: bool = True,
+    query: str = "",
+    search_pool_size: int | None = None,
+    workflow_id: str | None = None,
+) -> dict[str, Any]:
+    """Run pure ReAct work, then deliver only when a channel is supplied."""
 
-    aliases = {"email": "gmail", "mail": "gmail", "tg": "telegram"}
-    if delivery_channel is not None:
-        delivery_channel = aliases.get(
-            delivery_channel.strip().lower(), delivery_channel.strip().lower()
-        )
-        if delivery_channel not in {"gmail", "telegram"}:
-            raise ValueError("delivery_channel must be 'gmail' or 'telegram'.")
-    _reset_agent3_completion_state(cv_info, delivery_channel)
-
-    try:
-        agent_result = run_agent3_job_matching(
-            cv_info,
-            results_count=results_count,
-            location=location,
-        )
-    except Exception as exc:
-        # A native tool-calling provider can reject one malformed tool call
-        # after LinkedIn matching has already completed. Preserve the valid,
-        # deterministic ranking and let complete_agent3_delivery repair the
-        # remaining cover/delivery steps instead of discarding the whole run.
-        match_result = get_last_match_result()
-        if not match_result or not match_result.get("ranked_jobs"):
-            raise
-        error_text = f"{type(exc).__name__}: {exc}"
-        agent_result = {
-            "output": (
-                "Agent 3's tool loop stopped after producing a valid ranking "
-                f"({error_text}). The deterministic completion guard continued "
-                "the cover-letter and delivery steps."
-            ),
-            "intermediate_steps": [],
-            "orchestration_error": error_text,
-        }
-    else:
-        match_result = get_last_match_result() or {"ranked_jobs": []}
-
-    return complete_agent3_delivery(
-        agent_result,
+    channel = _normalize_delivery_channel(delivery_channel)
+    _reset_agent3_state(cv_info)
+    result, context = _invoke_agent3(
         cv_info,
-        match_result,
-        delivery_channel=delivery_channel,
+        results_count,
+        location,
+        verbose,
+        query=query,
+        search_pool_size=search_pool_size,
     )
+    result = _finalize_agent3_result(result, context)
+    result["workflow_id"] = workflow_id or str(uuid4())
+    result["cv_info"] = cv_info
+    if channel is not None and result.get("status") == "awaiting_delivery":
+        result = deliver_agent3_result(result, channel)
+    return result
 
 
 def run_agent3_full_auto_from_pdf(
-    pdf_source,
+    pdf_source: Any,
     results_count: int = 3,
     location: str = "",
     use_cache: bool = True,
     delivery_channel: str | None = None,
-) -> dict:
-    """Run Agent 3's complete workflow starting from a CV PDF source."""
+    verbose: bool = True,
+    query: str = "",
+    search_pool_size: int | None = None,
+    workflow_id: str | None = None,
+) -> dict[str, Any]:
+    """Parse a CV PDF, run Agent 3, and optionally deliver approved results."""
 
-    from next_chapter.parsing.agent2_document_extractor import extract_cv_document_agent2
+    from next_chapter.parsing.agent2_document_extractor import (
+        extract_cv_document_agent2,
+    )
     from next_chapter.parsing.agent2_parser import extract_cv_info_agent2
 
     cv_document = extract_cv_document_agent2(pdf_source)
     cv_info = extract_cv_info_agent2(
         cv_document.text,
         layout_text=cv_document.layout_text,
-        cache_identity=(
-            f"{cv_document.extraction_version}:{cv_document.content_hash}"
-        ),
+        cache_identity=f"{cv_document.extraction_version}:{cv_document.content_hash}",
         use_cache=use_cache,
     )
     result = run_agent3_full_auto(
@@ -424,6 +441,10 @@ def run_agent3_full_auto_from_pdf(
         results_count=results_count,
         location=location,
         delivery_channel=delivery_channel,
+        verbose=verbose,
+        query=query,
+        search_pool_size=search_pool_size,
+        workflow_id=workflow_id,
     )
     result["cv_info"] = cv_info
     result["cv_extraction_backend"] = cv_document.backend
@@ -431,54 +452,138 @@ def run_agent3_full_auto_from_pdf(
     return result
 
 
+def deliver_agent3_result(
+    result: dict[str, Any],
+    delivery_channel: str,
+    cover_letter: str | None = None,
+) -> dict[str, Any]:
+    """Deliver a reviewed Agent 3 result without rerunning its ReAct loop."""
+
+    if result.get("workflow_type") != "agent3":
+        raise ValueError("The supplied result is not an Agent 3 workflow.")
+    delivery = result.get("delivery", {})
+    if result.get("status") == "completed" and delivery.get("status") == "completed":
+        raise ValueError("This Agent 3 result has already been delivered.")
+    if result.get("status") not in {"awaiting_delivery", "delivery_failed"}:
+        raise ValueError("This Agent 3 result is not ready for delivery.")
+
+    channel = _normalize_delivery_channel(delivery_channel)
+    if channel is None:
+        raise ValueError("A delivery channel is required.")
+    letter_source = (
+        cover_letter if cover_letter is not None else result.get("cover_letter") or ""
+    )
+    letter = str(letter_source).strip()
+    if not letter:
+        raise ValueError("A reviewed cover letter is required for delivery.")
+    ranked_jobs = list(result.get("ranked_jobs", []))
+    if not ranked_jobs:
+        raise ValueError("At least one ranked job is required for delivery.")
+
+    from next_chapter.parsing.agent2_cv_parser import Agent2CVInfo
+
+    cv_info = Agent2CVInfo.model_validate(result.get("cv_info"))
+    updated = deepcopy(result)
+    updated["cover_letter"] = letter
+    try:
+        if channel == "gmail":
+            if not cv_info.mail:
+                raise ValueError("The reviewed CV profile has no email address.")
+            from next_chapter.delivery.gmail import create_results_draft
+
+            receipt = create_results_draft(
+                cv_info,
+                ranked_jobs,
+                letter,
+                to_email=cv_info.mail,
+            )
+            observation = f"Gmail draft created successfully (id: {receipt['id']})."
+        else:
+            from next_chapter.delivery.telegram import create_results_telegram
+
+            receipt = create_results_telegram(
+                cv_info,
+                ranked_jobs,
+                letter,
+                delivery_id=str(result.get("workflow_id") or ""),
+            )
+            observation = (
+                "Telegram results sent successfully "
+                f"({len(receipt.get('messages', []))} message part(s))."
+            )
+    except Exception as exc:
+        updated["status"] = "delivery_failed"
+        updated["delivery"] = {
+            "channel": channel,
+            "status": "failed",
+            "error": str(exc),
+        }
+        return updated
+
+    updated["status"] = "completed"
+    updated["delivery"] = {
+        "channel": channel,
+        "status": "completed",
+        "observation": observation,
+    }
+    return updated
+
+
+def _build_interview_executor(verbose: bool) -> AgentExecutor:
+    tools = [generate_interview_preparation_pdf]
+    prompt = PromptTemplate.from_template(INTERVIEW_REACT_PROMPT)
+    agent = create_react_agent(
+        llm=get_agent3_llm(temperature=0.0),
+        tools=tools,
+        prompt=prompt,
+        output_parser=TolerantReActSingleInputOutputParser(),
+    )
+    return AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=verbose,
+        handle_parsing_errors=True,
+        max_iterations=4,
+        return_intermediate_steps=True,
+    )
+
+
 def run_agent3_interview_preparation(
     application_id: str,
     verbose: bool = True,
-) -> dict:
-    """Ask the ReAct executor to prepare one saved application for interview.
-
-    This is a separate, user-triggered request. It never runs the LinkedIn
-    workflow and needs no CV: the candidate profile is already in SQLite. The
-    tool result is attached deterministically so callers do not have to parse
-    the model's prose to find the PDF path.
-    """
+) -> dict[str, Any]:
+    """Run a separate one-tool ReAct request for a saved application."""
 
     resolved_id = str(application_id or "").strip()
     if not resolved_id:
         raise ValueError("application_id is required for interview preparation.")
 
     interview_tool.reset_interview_preparation_state()
-    executor = build_agent3_executor(verbose=verbose)
+    executor = _build_interview_executor(verbose)
     request = (
-        "The user explicitly requests interview preparation for the tracked "
-        f"application with application_id \"{resolved_id}\". Call "
-        "`generate_interview_preparation_pdf` exactly once with that ID, then "
-        "report the job title, company, PDF path, and model from its "
-        "observation, or the error it returned. Do not search LinkedIn, write "
-        "a cover letter, or deliver anything."
+        "Prepare interview material for the saved application with ID "
+        f"{resolved_id}."
     )
-    agent_result = executor.invoke({"input": request})
+    try:
+        result = executor.invoke({"input": request})
+    except Exception as exc:
+        result = {
+            "output": f"Interview ReAct run failed: {exc}",
+            "intermediate_steps": [],
+            "orchestration_error": f"{type(exc).__name__}: {exc}",
+        }
 
+    result["react_trace"] = _react_trace(result)
     preparation = interview_tool.get_last_interview_preparation()
-    if preparation is None:
-        # The model skipped or mangled the call; run the tool deterministically
-        # so the user still receives an honest result.
-        observation = generate_interview_preparation_pdf.func(resolved_id)
-        preparation = interview_tool.get_last_interview_preparation()
-        if preparation is None:
-            agent_result["interview_preparation"] = None
-            agent_result["interview_error"] = json.loads(observation).get(
-                "error", observation
-            )
-            return agent_result
-        agent_result["output"] += (
-            "\n\nInterview preparation completed by the deterministic guard: "
-            f"{preparation['pdf_path']}"
+    called = [step["tool"] for step in result["react_trace"]]
+    if "generate_interview_preparation_pdf" not in called or preparation is None:
+        result["interview_preparation"] = None
+        result["interview_error"] = (
+            "The ReAct executor did not successfully generate the interview PDF."
         )
-    agent_result["interview_preparation"] = preparation
-    return agent_result
+        return result
+    result["interview_preparation"] = preparation
+    return result
 
 
-# The natural Agent 3 entry point now runs the complete workflow. Call
-# run_agent3_job_matching explicitly when ranking-only behavior is desired.
 run_agent3 = run_agent3_full_auto_from_pdf

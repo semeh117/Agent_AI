@@ -50,9 +50,13 @@ def main():
                     st.rerun()
                 except Exception as exc:
                     show_error(exc)
-        if st.session_state.get("result", {}).get("workflow_id") not in (None, "sample"):
+        current_result = st.session_state.get("result", {})
+        if (
+            current_result.get("workflow_type", "agent2") == "agent2"
+            and current_result.get("workflow_id") not in (None, "sample")
+        ):
             st.caption("Saved search ID")
-            st.code(st.session_state.result["workflow_id"], language=None)
+            st.code(current_result["workflow_id"], language=None)
     try:
         {"Your profile": profile_page, "Job matches": matches_page, "Applications": applications_page}[page]()
     except Exception as exc:

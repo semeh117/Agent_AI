@@ -34,8 +34,13 @@ def parse_uploaded_cv(content: bytes) -> tuple[dict, list[str]]:
 
 
 def provider_ready(role: str) -> bool:
-    defaults = {"parser": "openrouter", "agent": "openrouter",
-                "cover_letter": "gemini", "interview": "groq"}
+    defaults = {
+        "parser": "openrouter",
+        "agent": "openrouter",
+        "agent3": "gemini",
+        "cover_letter": "gemini",
+        "interview": "groq",
+    }
     provider = os.getenv(f"{role.upper()}_PROVIDER", defaults[role]).lower()
     return provider == "ollama" or bool(os.getenv(f"{provider.upper()}_API_KEY", "").strip())
 

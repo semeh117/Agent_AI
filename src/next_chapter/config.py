@@ -135,7 +135,7 @@ def get_parser_llm(temperature: float = 0.0):
 
 
 def get_agent_llm(temperature: float = 0.0):
-    """Build the Agent 1/3 orchestrator and Agent 2 query-generation model."""
+    """Build the Agent 1 orchestrator and Agent 2 query-generation model."""
 
     provider = os.getenv("AGENT_PROVIDER", "openrouter").lower()
     model = os.getenv(
@@ -143,6 +143,14 @@ def get_agent_llm(temperature: float = 0.0):
         "nvidia/nemotron-3.5-lightning:free",
     )
     return _build_llm(provider, model, temperature, role="agent")
+
+
+def get_agent3_llm(temperature: float = 0.0):
+    """Build the model dedicated to Agent 3's text-based ReAct protocol."""
+
+    provider = os.getenv("AGENT3_PROVIDER", "gemini").lower()
+    model = os.getenv("AGENT3_MODEL", _model_for_provider(provider))
+    return _build_llm(provider, model, temperature, role="agent3")
 
 
 def get_cover_letter_llm(temperature: float = 0.3):

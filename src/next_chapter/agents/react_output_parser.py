@@ -21,6 +21,7 @@ iteration — at worst costing one extra loop step instead of a retry.
 """
 
 import re
+from difflib import get_close_matches
 
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.exceptions import OutputParserException
@@ -80,14 +81,22 @@ class RequiredToolsVerifyingParser(TolerantReActSingleInputOutputParser):
     only_if_any: set = set()
     any_one_of: list = []
     max_rejections: int = 2
+    tool_aliases: dict = {}
+    valid_tools: set = set()
 
     def __init__(self, required_tools, only_if_any, any_one_of=None,
-                 max_rejections: int = 2, **kwargs):
+                 max_rejections: int = 2, tool_aliases=None,
+                 valid_tools=None, **kwargs):
         super().__init__(**kwargs)
         self.required_tools = set(required_tools)
         self.only_if_any = set(only_if_any)
         self.any_one_of = [set(group) for group in (any_one_of or [])]
         self.max_rejections = max_rejections
+        self.tool_aliases = {
+            str(alias).strip().casefold(): str(canonical).strip()
+            for alias, canonical in (tool_aliases or {}).items()
+        }
+        self.valid_tools = {str(name).strip() for name in (valid_tools or set())}
         self._called_tools: set[str] = set()
         self._rejections_left = max_rejections
 
@@ -95,6 +104,29 @@ class RequiredToolsVerifyingParser(TolerantReActSingleInputOutputParser):
         parsed = super().parse(text)
 
         if isinstance(parsed, AgentAction):
+            requested = parsed.tool.strip().casefold()
+            canonical = self.tool_aliases.get(requested)
+            if canonical is None and self.valid_tools:
+                names = {name.casefold(): name for name in self.valid_tools}
+                if requested in names:
+                    canonical = names[requested]
+                else:
+                    close = get_close_matches(
+                        requested,
+                        list(names),
+                        n=2,
+                        cutoff=0.84,
+                    )
+                    if len(close) == 1:
+                        canonical = names[close[0]]
+            if canonical is not None:
+                corrected_log = re.sub(
+                    r"(Action\s*\d*\s*:\s*)[^\r\n]+",
+                    lambda match: f"{match.group(1)}{canonical}",
+                    parsed.log,
+                    count=1,
+                )
+                parsed = AgentAction(canonical, parsed.tool_input, corrected_log)
             self._called_tools.add(parsed.tool)
             return parsed
 

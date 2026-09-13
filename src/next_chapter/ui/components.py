@@ -1,6 +1,7 @@
 """Streamlit components: extracted from the original app.py."""
 import streamlit as st
 from html import escape
+import json
 from next_chapter.agents.agent2 import resume_agent2_workflow, retry_agent2_delivery
 
 
@@ -22,8 +23,13 @@ def page_header(step, title, description):
 def remember_result(result: dict):
     st.session_state.result = result
     st.session_state.sample = result.get("status") == "sample"
-    if result.get("workflow_id") != "sample":
+    if (
+        result.get("workflow_type", "agent2") == "agent2"
+        and result.get("workflow_id") not in (None, "sample")
+    ):
         st.query_params["workflow"] = result["workflow_id"]
+    elif result.get("workflow_type") == "agent3":
+        st.query_params.pop("workflow", None)
 
 
 def load_profile(profile: dict):
@@ -63,6 +69,50 @@ def match_card(job: dict, rank: int):
             st.link_button("View job posting ↗", url)
 
 
+def react_trace_panel(result: dict):
+    """Show Agent 3's public action/observation trace without model thoughts."""
+
+    if result.get("workflow_type") != "agent3":
+        return
+    trace = result.get("react_trace", [])
+    if not trace:
+        return
+    with st.expander("Agent 3 · ReAct action trace", expanded=False):
+        st.caption(
+            "Each row is an action chosen by Agent 3 followed by the real tool observation."
+        )
+        for index, step in enumerate(trace, start=1):
+            tool = step.get("tool", "unknown")
+            if tool == "_Exception":
+                st.warning(f"{index}. Format recovery · {step.get('observation', '')}")
+                continue
+            st.markdown(f"**{index}. `{tool}`**")
+            st.caption(f"Input: {step.get('input') or 'none'}")
+            observation = str(step.get("observation") or "")
+            try:
+                payload = json.loads(observation)
+            except (json.JSONDecodeError, TypeError):
+                st.write(observation)
+                continue
+            if payload.get("error"):
+                st.error(payload["error"])
+            elif tool == "search_linkedin_jobs":
+                st.write(f"Observation: {payload.get('scraped_count', 0)} postings scraped.")
+            elif tool == "evaluate_linkedin_results":
+                st.write(
+                    "Observation: "
+                    f"{payload.get('parsed_count', 0)} evaluated, "
+                    f"{payload.get('skipped_count', 0)} skipped."
+                )
+            elif tool == "analyze_skill_gaps":
+                st.write(
+                    "Observation: "
+                    f"{len(payload.get('recurring_missing_skills', []))} recurring gaps."
+                )
+            else:
+                st.write("Observation received.")
+
+
 def delivery_panel(result):
     st.subheader("Your cover letter")
     if result.get("status") == "sample":
@@ -84,8 +134,23 @@ def delivery_panel(result):
     if approved:
         try:
             with st.spinner("Delivering your reviewed results…"):
-                updated = resume_agent2_workflow(result["workflow_id"],
-                    "gmail" if channel == "Gmail draft" else "telegram", cover_letter=edited)
+                selected_channel = (
+                    "gmail" if channel == "Gmail draft" else "telegram"
+                )
+                if result.get("workflow_type") == "agent3":
+                    from next_chapter.agents.agent3 import deliver_agent3_result
+
+                    updated = deliver_agent3_result(
+                        result,
+                        selected_channel,
+                        cover_letter=edited,
+                    )
+                else:
+                    updated = resume_agent2_workflow(
+                        result["workflow_id"],
+                        selected_channel,
+                        cover_letter=edited,
+                    )
             remember_result(updated)
             st.rerun()
         except Exception as exc:
@@ -109,7 +174,16 @@ def delivery_panel(result):
         if st.button("Retry approved delivery"):
             try:
                 with st.spinner("Retrying delivery…"):
-                    remember_result(retry_agent2_delivery(result["workflow_id"]))
+                    if result.get("workflow_type") == "agent3":
+                        from next_chapter.agents.agent3 import deliver_agent3_result
+
+                        updated = deliver_agent3_result(
+                            result,
+                            delivery.get("channel", "telegram"),
+                        )
+                    else:
+                        updated = retry_agent2_delivery(result["workflow_id"])
+                    remember_result(updated)
                 st.rerun()
             except Exception as exc:
                 show_error(exc)

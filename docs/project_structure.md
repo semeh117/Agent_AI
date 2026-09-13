@@ -21,7 +21,8 @@ stage/
 │   │   └── assets/workspace.css   Packaged interface styles
 │   ├── agents/                    Agent 1, 2, 3 and the interview graph
 │   │   ├── agent1_support.py      Agent 1 ReAct foundation
-│   │   └── tools/                 Agent-facing adapters
+│   │   ├── react_output_parser.py Tolerant textual ReAct parsing
+│   │   └── tools/                 Agent-facing adapters and Agent 3 run tools
 │   ├── parsing/                   PDF text extraction and parser schemas
 │   │   ├── agent2_document_extractor.py  Dual-view PyPDF extraction
 │   │   ├── agent2_cv_parser.py    CV prompt and extraction orchestration

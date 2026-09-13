@@ -10,18 +10,26 @@ storage, and PDF rendering execute in that environment.
 ```text
 app.py → next_chapter.ui.app
   profile → dual-view PyPDF extraction → structured CV parsing → review
-  matches → Agent 2 LangGraph
-              query → LinkedIn search → parse jobs → cosine ranking
-              → save applications → cover letter → approval pause
-              → Gmail draft or Telegram delivery
+  matches → workflow choice
+              Agent 2 LangGraph
+                query → LinkedIn search → parse jobs → cosine ranking
+                → save applications → cover letter → checkpointed approval pause
+              Agent 3 classic ReAct
+                search action → evaluate action → skill-gap action
+                → cover-letter action → visible action/observation trace
+            → reviewed delivery → Gmail draft or Telegram message
   applications → status/notes/downloads
                  → separate Agent 2 interview graph → saved PDF
 ```
 
-Agent 1 uses a ReAct Himalayas workflow. Agent 2 is the explicit LinkedIn
-LangGraph used by Streamlit. Agent 3 is the LinkedIn tool-calling comparison
-variant. It uses the same ranking pipeline and application services as Agent 2.
-Agent 3's interview tool invokes the shared preparation service on request.
+Agent 1 uses the original ReAct Himalayas workflow. Streamlit exposes both
+Agent 2's explicit LinkedIn LangGraph and Agent 3's classic LinkedIn ReAct
+workflow. Agent 3's model emits textual Thought/Action/Action Input steps and
+reads each real Observation before continuing. Separate run-scoped tools expose
+LinkedIn scraping, deterministic parsing/ranking, recurring skill-gap analysis,
+and cover-letter generation. It uses the same algorithms and application
+services as Agent 2. Delivery is selected outside the ReAct loop, and Agent 3's
+separate interview tool invokes the shared preparation service on request.
 
 ## Responsibilities and dependencies
 
@@ -51,7 +59,9 @@ Agents 2 and 3 share `runtime/agent2.sqlite3`; Agent 1 uses
 `cache/seen_jobs_memory.db`. No schema change accompanies this reorganization.
 The graph stores application state as dictionaries and recreates profile
 models at its public interface. Workflow node names and IDs are preserved.
-Search IDs in the Streamlit URL can restore paused searches across restarts.
+Agent 2 search IDs in the Streamlit URL restore paused graph checkpoints across
+restarts. Agent 3's trace and pending delivery are session state, while its
+ranked applications remain in the shared database.
 
 `cache/` keeps content-addressed extraction and parser results. The PyPDF
 extractor stores readable and layout-oriented views under its own cache version,
@@ -73,7 +83,7 @@ workspace files, fixtures, and development tools are not packaged.
 
 ## Work deferred from this cleanup
 
-Module-level state in Agent 1/3 tools, Telegram's reuse of email formatting,
-and mixed generation/rendering responsibilities in the interview service
-remain follow-up refactors. Matching rules, prompts, model choices, and delivery
-behavior are preserved.
+Module-level state in Agent 1 and the shared cover/delivery adapters, Telegram's
+reuse of email formatting, and mixed generation/rendering responsibilities in
+the interview service remain follow-up refactors. Matching rules, model choices,
+and delivery behavior are preserved.

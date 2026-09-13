@@ -219,6 +219,92 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(app.session_state["result"]["cover_letter"], "My reviewed letter")
         self.assertEqual(app.session_state["result"]["status"], "completed")
 
+    def test_streamlit_agent3_search_trace_and_delivery(self):
+        from next_chapter.ui.support import sample_profile, sample_result
+
+        def fake_agent3(cv_info, **kwargs):
+            result = sample_result()
+            result.update({
+                "workflow_type": "agent3",
+                "workflow_id": kwargs["workflow_id"],
+                "status": "awaiting_delivery",
+                "delivery": {"status": "awaiting_choice"},
+                "cv_info": cv_info,
+                "match_result": {
+                    "parsed_count": 3,
+                    "skipped_count": 0,
+                    "skipped_jobs": [],
+                },
+                "react_trace": [
+                    {
+                        "tool": "search_linkedin_jobs",
+                        "input": "Python Backend Developer",
+                        "observation": json.dumps({"scraped_count": 3}),
+                    },
+                    {
+                        "tool": "evaluate_linkedin_results",
+                        "input": "none",
+                        "observation": json.dumps({"parsed_count": 3, "skipped_count": 0}),
+                    },
+                ],
+                "skill_gap_analysis": {
+                    "recurring_missing_skills": [{"skill": "AWS", "jobs": 2}],
+                    "recommendation": "Prioritize AWS",
+                },
+            })
+            return result
+
+        def fake_delivery(result, channel, cover_letter=None):
+            return {
+                **result,
+                "status": "completed",
+                "cover_letter": cover_letter or result["cover_letter"],
+                "delivery": {"channel": channel, "status": "completed"},
+            }
+
+        with (
+            patch(
+                "next_chapter.ui.matches.run_agent3_full_auto",
+                side_effect=fake_agent3,
+            ) as run_agent3,
+            patch(
+                "next_chapter.agents.agent3.deliver_agent3_result",
+                side_effect=fake_delivery,
+            ) as deliver,
+        ):
+            app = self.app()
+            app.session_state["profile"] = sample_profile()
+            app.session_state["profile_confirmed"] = True
+            app.session_state["page"] = "Job matches"
+            app.run()
+            self.widget(app.radio, "Search workflow").set_value(
+                "Agent 3 · ReAct"
+            ).run()
+            self.widget(app.button, "Find my matches").click().run()
+
+            self.assert_clean(app)
+            self.assertEqual(
+                app.session_state["result"]["workflow_type"], "agent3"
+            )
+            self.assertEqual(app.session_state["result"]["status"], "awaiting_delivery")
+            self.assertTrue(
+                any(expander.label == "Agent 3 · ReAct action trace" for expander in app.expander)
+            )
+            run_agent3.assert_called_once()
+
+            self.widget(app.text_area, "Review and edit your letter").set_value(
+                "Reviewed Agent 3 letter"
+            )
+            self.widget(app.button, "Approve and deliver").click().run()
+
+            self.assert_clean(app)
+            self.assertEqual(app.session_state["result"]["status"], "completed")
+            self.assertEqual(
+                app.session_state["result"]["cover_letter"],
+                "Reviewed Agent 3 letter",
+            )
+            deliver.assert_called_once()
+
     def test_tracker_status_notes_and_saved_profile(self):
         from next_chapter.ui.support import sample_profile, sample_result
         from next_chapter.services.application_tracker import save_application, get_application

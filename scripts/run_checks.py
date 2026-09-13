@@ -12,7 +12,16 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SUITES = [
     ("Agent 2 workflows", ["-m", "tests.test_agent2"]),
-    ("Agent 3 workflows", ["-m", "tests.test_agent3"]),
+    (
+        "Agent 3 workflows",
+        [
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_agent3.py",
+            "tests/test_agent3_react_tools.py",
+        ],
+    ),
     ("Database and interview PDFs", ["-m", "tests.test_agent2_database"]),
     ("Cosine matcher", ["-m", "tests.test_cosine_matcher"]),
     ("Parser fixtures", ["-m", "tests.test_parser_fixtures"]),

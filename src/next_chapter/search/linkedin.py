@@ -19,7 +19,7 @@ This module does NOT:
     - save CSV files
 
 The production wrapper and ranking orchestration live in:
-    src/next_chapter/agents/tools/linkedin_match_tool.py
+    src/next_chapter/agents/tools/agent3_react_tools.py
     src/next_chapter/pipelines/linkedin_matching.py
 
 Public function:

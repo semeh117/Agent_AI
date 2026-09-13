@@ -2,8 +2,9 @@
 
 A local Streamlit app for reviewing a CV, finding and explaining job matches,
 editing a cover letter, tracking applications, and preparing for interviews.
-Agent 2 orchestrates the workflow with LangGraph; Agents 1 and 3 remain available
-for comparison through `next_chapter.agents` and the live demos in `examples/`.
+The Streamlit search page lets the user choose Agent 2's checkpointed LangGraph
+workflow or Agent 3's classic ReAct workflow. Agent 1 remains available through
+`next_chapter.agents` and the live demo in `examples/`.
 
 ## Start the app
 
@@ -43,10 +44,15 @@ the next Cloud deployment.
 ## Configure a live run
 
 Edit `.env` using the role-specific provider and model settings in the example.
-With its defaults, CV/job parsing uses `OPENROUTER_API_KEY`, orchestration and
-interview preparation use `GROQ_API_KEY`, and letters use `GEMINI_API_KEY`.
+With the checked-in example, CV/job parsing uses `OPENROUTER_API_KEY`, Agent 2
+query generation and interview preparation use `GROQ_API_KEY`, and Agent 3 plus
+cover-letter generation use `GEMINI_API_KEY`.
 API usage is charged by your configured providers. Query generation falls back
 to a deterministic query if its model fails; a user-entered query skips that call.
+
+On Streamlit Community Cloud, copy the same variable names into the app's
+**Settings → Secrets** as root-level TOML entries. You do not need to commit a
+`.streamlit/secrets.toml` file.
 
 Install Google Chrome for local searches. Selenium detects a standard Chrome
 installation automatically; set `CHROME_BINARY` and `CHROMEDRIVER_PATH` only for
@@ -73,11 +79,12 @@ and semantic matching; ESCO normalization is unavailable.
    supported; export the CV directly from Word, Google Docs, or Canva so it has
    selectable text. Review and correct the extracted profile, then select
    **Save reviewed profile**.
-2. Open **Job matches**. Choose a query, location, result count and search pool.
-   All valid jobs in the selected pool are scored before the top results are
-   selected. Small pools limit cost and runtime; a larger pool allows more comparison.
-   The effective pool is at least the requested result count. Searches cover
-   the last 30 days and exclude jobs already tracked for the candidate.
+2. Open **Job matches**. Choose **Agent 2 · LangGraph** or **Agent 3 · ReAct**,
+   then choose a query, location, result count and search pool. All valid jobs in
+   the selected pool are scored before the top results are selected. Small pools
+   limit cost and runtime; a larger pool allows more comparison. The effective
+   pool is at least the requested result count. Searches cover the last 30 days
+   and exclude jobs already tracked for the candidate.
 3. Review matched/missing requirements and edit the top-job cover letter.
    Download it or explicitly approve a delivery channel.
 4. Open **Applications** to update status, append notes, reuse a saved profile,
@@ -105,10 +112,11 @@ After a timeout, server error, crash, or unreadable response, the outcome may be
 uncertain. The app asks you to check the chat and record whether that part arrived
 before retrying. It cannot guarantee exactly-once delivery across an external API.
 
-Search IDs are retained in the page URL. Keep the URL or copy the ID from the
-sidebar to restore the checkpoint after restarting the app. Approval is accepted
-only for a paused workflow; failed delivery has a separate retry action that
-preserves the approved content and does not repeat scraping or generation.
+Agent 2 search IDs are retained in the page URL. Keep the URL or copy the ID from
+the sidebar to restore its checkpoint after restarting the app. Agent 3's ReAct
+trace and pending delivery remain in the current Streamlit session; its ranked
+applications are still saved in SQLite. For both workflows, delivery uses the
+reviewed result and does not repeat scraping, scoring, or letter generation.
 
 ## Verification
 

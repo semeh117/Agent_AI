@@ -1,1 +1,1 @@
-"""Agent entry points and legacy tool-calling implementations."""
+"""Agent entry points for ReAct, LangGraph, and deterministic workflows."""

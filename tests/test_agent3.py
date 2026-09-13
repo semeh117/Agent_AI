@@ -1,88 +1,21 @@
-"""Offline Agent 3 regression tests. Live demo: python -m examples.run_agent3."""
+"""Offline tests for Agent 3's classic ReAct orchestration."""
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
-from pathlib import Path
-import sys
-import tempfile
-from typing import Any, Optional
+from typing import Any
 
+from langchain_core.language_models.fake import FakeListLLM
+import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-
-import next_chapter.agents.agent3 as agent3_workflow
+import next_chapter.agents.agent3 as agent3
 import next_chapter.agents.tools.cover_letter as cover_letter_tool
-import next_chapter.agents.tools.gmail as gmail_tool
-import next_chapter.agents.tools.interview_preparation as interview_tool
-import next_chapter.agents.tools.linkedin_match_tool as linkedin_tool
-import next_chapter.agents.tools.telegram_tool as telegram_tool
-from next_chapter.agents.agent3 import run_agent3_full_auto_from_pdf
+import next_chapter.agents.tools.agent3_react_tools as react_tools
+import next_chapter.delivery.telegram as telegram_delivery
+from next_chapter.agents.react_output_parser import RequiredToolsVerifyingParser
 from next_chapter.parsing.agent2_cv_parser import Agent2CVInfo
 
 
-# ---------------------------------------------------------------------------
-# Offline fakes
-# ---------------------------------------------------------------------------
-
-
-class _ScriptedToolCallingModel(BaseChatModel):
-    """Chat model that replays scripted tool calls, then a final answer.
-
-    ``create_tool_calling_agent`` only needs ``bind_tools`` and ``invoke``. Each
-    scripted step is a list of ``(tool_name, args)`` pairs; an empty list means
-    "answer without tools", which ends the AgentExecutor loop.
-    """
-
-    script: list[list[tuple[str, dict[str, Any]]]]
-    final_answer: str = "Scripted final answer."
-    seen_tool_names: list[str] = []
-    step: int = 0
-
-    @property
-    def _llm_type(self) -> str:
-        return "scripted-tool-calling"
-
-    def bind_tools(self, tools, **_kwargs):
-        self.seen_tool_names = [getattr(tool, "name", str(tool)) for tool in tools]
-        return self
-
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
-        run_manager=None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        calls = self.script[self.step] if self.step < len(self.script) else []
-        self.step += 1
-        if calls:
-            message = AIMessage(
-                content="",
-                tool_calls=[
-                    {"name": name, "args": args, "id": f"call-{self.step}-{index}"}
-                    for index, (name, args) in enumerate(calls)
-                ],
-            )
-        else:
-            message = AIMessage(content=self.final_answer)
-        return ChatResult(generations=[ChatGeneration(message=message)])
-
-
-def _fake_cv() -> Agent2CVInfo:
+def _cv() -> Agent2CVInfo:
     return Agent2CVInfo(
         full_name="Test Candidate",
         skills=["Python", "LangGraph", "RAG"],
@@ -94,360 +27,255 @@ def _fake_cv() -> Agent2CVInfo:
     )
 
 
-def _fake_ranked_jobs() -> list[dict[str, Any]]:
-    def job(index: int, score: float) -> dict[str, Any]:
-        return {
-            "job_title": f"AI Engineer {index}",
-            "company": f"Example AI {index}",
-            "url": f"https://example.com/job/{index}",
-            "description": "Build production AI systems with Python and LangGraph.",
-            "skills_score": score - 10,
+def _ranked_jobs() -> list[dict[str, Any]]:
+    return [
+        {
+            "job_title": "AI Engineer",
+            "company": "Example AI",
+            "url": "https://example.com/job/1",
+            "description": "Build AI systems with Python.",
+            "skills_score": 80.0,
             "experience_score": 100.0,
             "education_score": 100.0,
-            "final_score": score,
-            "score_percent": score,
+            "final_score": 90.0,
+            "score_percent": 90.0,
             "skills_detail": {
                 "matching": [{"job_skill": "Python", "matched_via": "Python"}],
-                "missing": ["Kubernetes"],
+                "missing": ["Docker", "AWS"],
             },
             "inconclusive": False,
-        }
-
-    return [job(1, 90.0), job(2, 75.0), job(3, 60.0)]
-
-
-def _fake_match_linkedin_jobs(**_kwargs) -> dict[str, Any]:
-    return {
-        "ranked_jobs": _fake_ranked_jobs(),
-        "skipped_count": 0,
-        "skipped_jobs": [],
-    }
-
-
-class _Patcher:
-    """Minimal monkeypatch replacement that restores attributes afterwards."""
-
-    def __init__(self) -> None:
-        self._originals: list[tuple[object, str, object]] = []
-
-    def setattr(self, target, name, value):
-        self._originals.append((target, name, getattr(target, name)))
-        setattr(target, name, value)
-
-    def undo(self) -> None:
-        while self._originals:
-            target, name, original = self._originals.pop()
-            setattr(target, name, original)
+        },
+        {
+            "job_title": "ML Engineer",
+            "company": "Example ML",
+            "url": "https://example.com/job/2",
+            "description": "Deploy ML services.",
+            "skills_score": 60.0,
+            "experience_score": 100.0,
+            "education_score": 100.0,
+            "final_score": 80.0,
+            "score_percent": 80.0,
+            "skills_detail": {
+                "matching": [{"job_skill": "Python", "matched_via": "Python"}],
+                "missing": ["Docker"],
+            },
+            "inconclusive": False,
+        },
+    ]
 
 
-class _OfflineAgent3Environment:
-    """Temporary database plus fakes for every external dependency."""
-
-    def __init__(self, model: _ScriptedToolCallingModel) -> None:
-        self.model = model
-        self.patcher = _Patcher()
-        self.calls: dict[str, int] = {
-            "match": 0,
-            "cover_letter": 0,
-            "gmail": 0,
-            "telegram": 0,
-            "interview": 0,
-        }
-
-    def __enter__(self):
-        import next_chapter.services.interview_preparation as interview_service
-
-        self._directory = tempfile.TemporaryDirectory()
-        self.root = Path(self._directory.name)
-        self._previous_db = os.environ.get("AGENT2_DATABASE_PATH")
-        os.environ["AGENT2_DATABASE_PATH"] = str(self.root / "agent2.sqlite3")
-
-        def fake_match(**kwargs):
-            self.calls["match"] += 1
-            return _fake_match_linkedin_jobs(**kwargs)
-
-        def fake_cover_letter(*_args, **_kwargs):
-            self.calls["cover_letter"] += 1
-            return "A grounded test cover letter."
-
-        def fake_gmail(*_args, **_kwargs):
-            self.calls["gmail"] += 1
-            return {"id": "draft-test-1"}
-
-        def fake_telegram(*_args, **_kwargs):
-            self.calls["telegram"] += 1
-            return {"messages": [{"ok": True}]}
-
-        def fake_interview_content(_application, _profile, *, llm=None):
-            self.calls["interview"] += 1
-            return interview_service.InterviewPreparationContent.model_validate(
-                _fake_interview_payload()
-            )
-
-        # The shared tools bind these names at import time, so the fakes are
-        # installed on the tool modules themselves (not on the pipelines).
-        self.patcher.setattr(agent3_workflow, "get_agent_llm", lambda **_k: self.model)
-        self.patcher.setattr(linkedin_tool, "match_linkedin_jobs", fake_match)
-        self.patcher.setattr(cover_letter_tool, "generate_cover_letter", fake_cover_letter)
-        self.patcher.setattr(gmail_tool, "create_results_draft", fake_gmail)
-        self.patcher.setattr(telegram_tool, "create_results_telegram", fake_telegram)
-        self.patcher.setattr(
-            interview_service, "generate_interview_content", fake_interview_content
-        )
-        self.patcher.setattr(
-            interview_service,
-            "DEFAULT_INTERVIEW_PDF_DIRECTORY",
-            self.root / "pdf",
-        )
-        return self
-
-    def __exit__(self, *_exc):
-        self.patcher.undo()
-        if self._previous_db is None:
-            os.environ.pop("AGENT2_DATABASE_PATH", None)
-        else:
-            os.environ["AGENT2_DATABASE_PATH"] = self._previous_db
-        self._directory.cleanup()
-        return False
-
-
-def _fake_interview_payload() -> dict[str, Any]:
-    def question(number: int, category: str) -> dict:
-        return {
-            "question": f"{category} interview question {number}?",
-            "why_asked": "This checks relevant role knowledge.",
-            "answer_strategy": "Explain the approach and connect it to CV evidence.",
-            "sample_answer": (
-                "I would begin with the Python project stated in my CV and "
-                "explain my decisions honestly."
-            ),
-            "cv_evidence": ["Python"],
-        }
-
-    return {
-        "role_summary": (
-            "This AI Engineer role focuses on grounded production systems "
-            "and reliable Python delivery."
-        ),
-        "technical_questions": [question(i, "Technical") for i in range(1, 6)],
-        "gap_questions": [question(i, "Gap") for i in range(1, 3)],
-        "behavioral_questions": [question(i, "Behavioral") for i in range(1, 4)],
-        "questions_to_ask": [
-            "How do you evaluate model quality?",
-            "How is the AI team organized?",
-            "What does success look like in ninety days?",
-            "How are production incidents handled?",
-        ],
-        "preparation_checklist": [
-            "Review the job description.",
-            "Prepare two project examples.",
-            "Practice concise technical explanations.",
-            "Review the missing skills honestly.",
-            "Prepare questions for the interviewer.",
-        ],
-    }
-
-
-def _full_auto_script() -> list[list[tuple[str, dict[str, Any]]]]:
-    """The scripted model performs the five-tool workflow, then answers."""
-
+def _responses() -> list[str]:
     return [
-        [("match_linkedin_jobs_for_agent", {"query": "AI Engineer Python LangGraph"})],
-        [("write_cover_letter", {"url": "https://example.com/job/1"})],
-        [("send_results_telegram", {"_unused_input": ""})],
-        [],
+        (
+            "I need relevant LinkedIn postings.\n"
+            "Action: search_linkedin_jobs\n"
+            "Action Input: AI Engineer Python LangGraph"
+        ),
+        (
+            "The titles are relevant, so I should evaluate them.\n"
+            "Action: evaluate_linkedin_results\n"
+            "Action Input: none"
+        ),
+        (
+            "I need evidence about recurring skill gaps.\n"
+            "Action: analyze_skill_gaps\n"
+            "Action Input: none"
+        ),
+        (
+            "The first ranked job is the valid top match.\n"
+            "Action: write_cover_letter_for_job\n"
+            "Action Input: https://example.com/job/1"
+        ),
+        (
+            "I now have the observed results.\n"
+            "Final Answer: Two jobs were ranked and the top job received a cover letter."
+        ),
     ]
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+def _install_fakes(monkeypatch):
+    calls = {"search": 0, "match": 0, "cover": 0, "telegram": 0}
 
-
-def test_agent3_exposes_interview_tool():
-    names = [tool.name for tool in agent3_workflow.TOOLS]
-    assert names == [
-        "match_linkedin_jobs_for_agent",
-        "write_cover_letter",
-        "ask_user_delivery_channel",
-        "send_results_draft",
-        "send_results_telegram",
-        "generate_interview_preparation_pdf",
-    ]
-    assert "explicitly asks" in agent3_workflow.generate_interview_preparation_pdf.description
-    assert "user-triggered only" in agent3_workflow.AGENT3_SYSTEM_PROMPT
-
-
-def test_agent3_full_auto_persists_ranking_without_interview():
-    from next_chapter.services.application_tracker import list_applications
-
-    model = _ScriptedToolCallingModel(script=_full_auto_script())
-    with _OfflineAgent3Environment(model) as env:
-        result = agent3_workflow.run_agent3_full_auto(
-            _fake_cv(),
-            results_count=3,
-            delivery_channel="telegram",
-        )
-
-        # Existing behaviour intact: ranking, cover letter, delivery.
-        assert model.seen_tool_names == [tool.name for tool in agent3_workflow.TOOLS]
-        assert [job["final_score"] for job in result["ranked_jobs"]] == [90.0, 75.0, 60.0]
-        assert result["cover_letter"] == "A grounded test cover letter."
-        assert result["cover_letter_job"]["url"] == "https://example.com/job/1"
-        assert result["delivery"] == {
-            "channel": "telegram",
-            "status": "completed",
-            "observation": result["delivery"]["observation"],
-        }
-        assert env.calls == {
-            "match": 1,
-            "cover_letter": 1,
-            "gmail": 0,
-            "telegram": 1,
-            "interview": 0,
-        }
-        called_tools = [action.tool for action, _ in result["intermediate_steps"]]
-        assert "generate_interview_preparation_pdf" not in called_tools
-        assert interview_tool.get_last_interview_preparation() is None
-
-        # Ranking persisted deterministically in the shared Agent 2 tracker,
-        # in ranking order, with URLs, scores and match details.
-        tracked = result["tracked_applications"]
-        assert [row["url"] for row in tracked] == [
-            "https://example.com/job/1",
-            "https://example.com/job/2",
-            "https://example.com/job/3",
+    def fake_search(**_kwargs):
+        calls["search"] += 1
+        return [
+            {
+                "title": "AI Engineer",
+                "company": "Example AI",
+                "url": "https://example.com/job/1",
+                "description": "Build AI systems with Python.",
+            },
+            {
+                "title": "ML Engineer",
+                "company": "Example ML",
+                "url": "https://example.com/job/2",
+                "description": "Deploy ML services.",
+            },
         ]
-        assert result["candidate_id"]
-        assert "persistence_warning" not in result
-        stored = list_applications(result["candidate_id"])
-        assert len(stored) == 3
-        by_url = {record.url: record for record in stored}
-        assert by_url["https://example.com/job/1"].final_score == 90.0
-        assert by_url["https://example.com/job/1"].status == "discovered"
-        assert by_url["https://example.com/job/1"].match_details["missing"] == ["Kubernetes"]
-        assert by_url["https://example.com/job/1"].candidate_email == "candidate@example.com"
 
-        # The observation the model saw stays compact and unchanged in order.
-        match_observation = json.loads(result["intermediate_steps"][0][1])
-        assert [job["final_score"] for job in match_observation["ranked_jobs"]] == [90.0, 75.0, 60.0]
-        assert all("description" not in job for job in match_observation["ranked_jobs"])
-        assert len(match_observation["tracked_applications"]) == 3
+    def fake_match(**_kwargs):
+        calls["match"] += 1
+        return {
+            "ranked_jobs": _ranked_jobs(),
+            "skipped_count": 0,
+            "skipped_jobs": [],
+        }
 
-        # A second run deduplicates instead of inserting again.
-        model.step = 0
-        agent3_workflow.run_agent3_full_auto(
-            _fake_cv(), results_count=3, delivery_channel="telegram"
-        )
-        assert len(list_applications(result["candidate_id"])) == 3
-
-
-def test_agent3_persistence_failure_keeps_ranking():
-    import next_chapter.services.application_tracker as tracker_service
-
-    model = _ScriptedToolCallingModel(script=_full_auto_script())
-    with _OfflineAgent3Environment(model) as env:
-
-        def broken_save(*_args, **_kwargs):
-            raise RuntimeError("disk unavailable")
-
-        env.patcher.setattr(tracker_service, "save_application", broken_save)
-        result = agent3_workflow.run_agent3_full_auto(
-            _fake_cv(), results_count=3, delivery_channel="telegram"
-        )
-        assert [job["final_score"] for job in result["ranked_jobs"]] == [90.0, 75.0, 60.0]
-        assert result["tracked_applications"] == []
-        assert "disk unavailable" in result["persistence_warning"]
-        assert result["delivery"]["status"] == "completed"
-
-
-def test_agent3_interview_tool_calls_shared_service():
-    from next_chapter.services.application_tracker import save_application
-    from next_chapter.services.interview_preparation import list_interview_preparations
-
-    model = _ScriptedToolCallingModel(script=[])
-    with _OfflineAgent3Environment(model) as env:
-        application = save_application(_fake_cv(), _fake_ranked_jobs()[0])
-
-        observation = json.loads(
-            agent3_workflow.generate_interview_preparation_pdf.func(
-                application.application_id
-            )
-        )
-        assert env.calls["interview"] == 1
-        assert observation["job_title"] == "AI Engineer 1"
-        assert observation["company"] == "Example AI 1"
-        assert observation["provider"] and observation["model"]
-        assert Path(observation["pdf_path"]).exists()
-        stored = list_interview_preparations(application.application_id)
-        assert [record.preparation_id for record in stored] == [observation["preparation_id"]]
-        assert interview_tool.get_last_interview_preparation() == observation
-
-        missing = json.loads(
-            agent3_workflow.generate_interview_preparation_pdf.func("does-not-exist")
-        )
-        assert "was not found" in missing["error"]
-        assert "pdf_path" not in missing
-        assert env.calls["interview"] == 1
-
-
-def test_agent3_interview_entry_point_uses_react_executor():
-    from next_chapter.services.application_tracker import save_application
-
-    with _OfflineAgent3Environment(_ScriptedToolCallingModel(script=[])) as env:
-        application = save_application(_fake_cv(), _fake_ranked_jobs()[0])
-        model = _ScriptedToolCallingModel(
-            script=[
-                [("generate_interview_preparation_pdf", {"application_id": application.application_id})],
-                [],
+    def fake_persist(_cv_info, jobs):
+        return {
+            "candidate_id": "candidate-1",
+            "tracked_applications": [
+                {"application_id": f"application-{index}", "url": job["url"]}
+                for index, job in enumerate(jobs, start=1)
             ],
-            final_answer="Interview PDF ready.",
-        )
-        env.patcher.setattr(agent3_workflow, "get_agent_llm", lambda **_k: model)
+        }
 
-        result = agent3_workflow.run_agent3_interview_preparation(
-            application.application_id, verbose=False
-        )
-        called_tools = [action.tool for action, _ in result["intermediate_steps"]]
-        assert called_tools == ["generate_interview_preparation_pdf"]
-        assert env.calls["match"] == 0 and env.calls["cover_letter"] == 0
-        assert env.calls["interview"] == 1
-        assert result["interview_preparation"]["application_id"] == application.application_id
-        assert Path(result["interview_preparation"]["pdf_path"]).exists()
-        assert result["output"] == "Interview PDF ready."
+    def fake_cover(*_args, **_kwargs):
+        calls["cover"] += 1
+        return "Grounded cover letter."
 
-        # Model skips the tool: the guard still produces an honest result.
-        lazy_model = _ScriptedToolCallingModel(script=[[]], final_answer="Done.")
-        env.patcher.setattr(agent3_workflow, "get_agent_llm", lambda **_k: lazy_model)
-        guarded = agent3_workflow.run_agent3_interview_preparation(
-            application.application_id, verbose=False
-        )
-        assert env.calls["interview"] == 2
-        assert guarded["interview_preparation"]["pdf_path"]
-        assert "deterministic guard" in guarded["output"]
+    def fake_telegram(*_args, **_kwargs):
+        calls["telegram"] += 1
+        return {"messages": [{"ok": True}]}
 
-        # Missing application: no PDF is claimed.
-        env.patcher.setattr(agent3_workflow, "get_agent_llm", lambda **_k: _ScriptedToolCallingModel(script=[[]]))
-        failed = agent3_workflow.run_agent3_interview_preparation("does-not-exist", verbose=False)
-        assert failed["interview_preparation"] is None
-        assert "was not found" in failed["interview_error"]
-        assert env.calls["interview"] == 2
+    import next_chapter.search.linkedin as linkedin_search
+
+    monkeypatch.setattr(linkedin_search, "search_jobs", fake_search)
+    monkeypatch.setattr(react_tools, "match_linkedin_jobs", fake_match)
+    monkeypatch.setattr(react_tools, "persist_ranked_jobs", fake_persist)
+    monkeypatch.setattr(cover_letter_tool, "generate_cover_letter", fake_cover)
+    monkeypatch.setattr(
+        telegram_delivery,
+        "create_results_telegram",
+        fake_telegram,
+    )
+    return calls
 
 
-def _run_offline_tests() -> int:
-    test_agent3_exposes_interview_tool()
-    test_agent3_full_auto_persists_ranking_without_interview()
-    test_agent3_persistence_failure_keeps_ranking()
-    test_agent3_interview_tool_calls_shared_service()
-    test_agent3_interview_entry_point_uses_react_executor()
-    print("Agent 3 tool-calling offline tests: PASS (5/5)")
-    return 0
+def test_agent3_uses_classic_react_prompt_and_tools(monkeypatch):
+    monkeypatch.setattr(
+        agent3,
+        "get_agent3_llm",
+        lambda **_kwargs: FakeListLLM(responses=_responses()),
+    )
+    context = react_tools.Agent3RunContext(_cv())
+    executor = agent3.build_agent3_executor(context, verbose=False)
+
+    assert agent3.build_agent3_prompt().input_variables == [
+        "agent_scratchpad",
+        "input",
+        "tool_names",
+        "tools",
+    ]
+    assert tuple(tool.name for tool in executor.tools) == agent3.AGENT3_TOOL_NAMES
+    assert "Thought:" in agent3.AGENT3_REACT_PROMPT
+    assert "Action:" in agent3.AGENT3_REACT_PROMPT
+    assert "Observation:" in agent3.AGENT3_REACT_PROMPT
+    assert "Action: one tool from" not in agent3.AGENT3_REACT_PROMPT
 
 
-# ---------------------------------------------------------------------------
-# Interactive live demo
-# ---------------------------------------------------------------------------
+def test_agent3_corrects_observed_linkedin_tool_misspelling():
+    parser = RequiredToolsVerifyingParser(
+        required_tools=set(),
+        only_if_any=set(),
+        tool_aliases={"search_linkinned_jobs": "search_linkedin_jobs"},
+    )
+
+    action = parser.parse(
+        "I need relevant jobs.\n"
+        "Action: search_linkinned_jobs\n"
+        "Action Input: Data Scientist Python XGBoost"
+    )
+
+    assert action.tool == "search_linkedin_jobs"
+    assert action.tool_input == "Data Scientist Python XGBoost"
+    assert "Action: search_linkedin_jobs" in action.log
+    assert "search_linkinned_jobs" not in action.log
 
 
-if __name__ == "__main__":
-    raise SystemExit(_run_offline_tests())
+def test_agent3_runs_real_action_observation_sequence(monkeypatch):
+    calls = _install_fakes(monkeypatch)
+    monkeypatch.setattr(
+        agent3,
+        "get_agent3_llm",
+        lambda **_kwargs: FakeListLLM(responses=_responses()),
+    )
+
+    result = agent3.run_agent3_full_auto(
+        _cv(), delivery_channel="telegram", verbose=False
+    )
+
+    assert [step["tool"] for step in result["react_trace"]] == list(
+        agent3.AGENT3_TOOL_NAMES
+    )
+    assert result["react_validation"]["status"] == "passed"
+    assert result["status"] == "completed"
+    assert result["delivery"]["channel"] == "telegram"
+    assert result["delivery"]["status"] == "completed"
+    assert result["ranked_jobs"][0]["url"] == "https://example.com/job/1"
+    assert result["skill_gap_analysis"]["recurring_missing_skills"] == [
+        {"skill": "Docker", "jobs": 2}
+    ]
+    assert result["cover_letter"] == "Grounded cover letter."
+    assert calls == {"search": 1, "match": 1, "cover": 1, "telegram": 1}
+
+
+def test_agent3_does_not_repair_a_skipped_react_action(monkeypatch):
+    calls = _install_fakes(monkeypatch)
+    responses = [
+        _responses()[0],
+        _responses()[1],
+        "I am finished.\nFinal Answer: Jobs were ranked.",
+        "I am still finished.\nFinal Answer: Jobs were ranked.",
+        "Final Answer: I could not complete every required action.",
+    ]
+    monkeypatch.setattr(
+        agent3,
+        "get_agent3_llm",
+        lambda **_kwargs: FakeListLLM(responses=responses),
+    )
+
+    result = agent3.run_agent3_full_auto(
+        _cv(), delivery_channel="telegram", verbose=False
+    )
+
+    assert result["react_validation"]["status"] == "failed"
+    assert result["status"] == "incomplete"
+    assert result["delivery"]["status"] == "skipped"
+    assert calls["cover"] == 0
+    assert calls["telegram"] == 0
+
+
+def test_agent3_streamlit_delivery_uses_reviewed_result_without_rerun(monkeypatch):
+    import next_chapter.delivery.gmail as gmail_delivery
+
+    calls = []
+    monkeypatch.setattr(
+        gmail_delivery,
+        "create_results_draft",
+        lambda cv, jobs, letter, to_email: calls.append(
+            (cv, jobs, letter, to_email)
+        ) or {"id": "draft-agent3"},
+    )
+    result = {
+        "workflow_type": "agent3",
+        "workflow_id": "agent3-ui-test",
+        "status": "awaiting_delivery",
+        "delivery": {"status": "awaiting_choice"},
+        "cv_info": _cv(),
+        "ranked_jobs": _ranked_jobs(),
+        "cover_letter": "Original letter",
+    }
+
+    delivered = agent3.deliver_agent3_result(
+        result,
+        "gmail",
+        cover_letter="Reviewed letter",
+    )
+
+    assert delivered["status"] == "completed"
+    assert delivered["cover_letter"] == "Reviewed letter"
+    assert delivered["delivery"]["observation"].endswith("draft-agent3).")
+    assert calls[0][2:] == ("Reviewed letter", "candidate@example.com")
+    with pytest.raises(ValueError, match="already been delivered"):
+        agent3.deliver_agent3_result(delivered, "gmail")

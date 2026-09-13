@@ -4,8 +4,8 @@ already evaluated as the top match. Wraps src/next_chapter/services/cover_letter
 generate_cover_letter() so the agent can call it as one more tool-use
 step in its own reasoning, after it has decided ranking is complete.
 
-Same module-level candidate-profile pattern as job_evaluator.py: the
-agent's tool-calling can only pass simple JSON/string arguments, not a
+Same module-level candidate-profile pattern as job_evaluator.py: an
+agent action should pass simple JSON/string arguments, not a
 full CVInfo object, so set_candidate_profile() (already called once by
 agent.py before the agent runs) is reused here too.
 
@@ -137,11 +137,8 @@ def write_cover_letter(
     if job_evaluator._current_cv_info is None:
         return "Error: No candidate profile loaded."
 
-    # Native tool-calling models naturally emit {"url": "..."}. Previously
-    # they had to wrap that object inside a second JSON-encoded string named
-    # evaluated_job_json, which caused schema-validation failures before this
-    # function could run. Keep the legacy string input while accepting the
-    # simple URL form directly.
+    # Keep the legacy JSON-string input while accepting the simpler URL form
+    # used by structured tool calls and Agent 3's single-input ReAct wrapper.
     if url and not evaluated_job_json:
         evaluated_job_json = json.dumps({"url": url}, ensure_ascii=False)
     if not evaluated_job_json:
@@ -193,6 +190,7 @@ def write_cover_letter(
     _last_cover_letter = letter
     _last_cover_letter_job = top_result_for_letter
 
-    return (f"Cover letter written successfully for {job['job_title']} @ {job['company']}. "
-            f"It is saved and ready — call send_results_draft next (you do not need to "
-            f"include the letter text in that call).")
+    return (
+        f"Cover letter written successfully for {job['job_title']} @ "
+        f"{job['company']}. It is saved and ready for the approved delivery step."
+    )

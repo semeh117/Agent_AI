@@ -1,4 +1,4 @@
-"""Interactive Agent 3 demo; may call providers and delivery services."""
+"""Interactive classic ReAct Agent 3 demo with optional delivery."""
 import argparse
 from pathlib import Path
 from next_chapter.paths import PROJECT_ROOT
@@ -22,7 +22,7 @@ def _select_cv() -> Path:
     return pdf_files[selected_index]
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Test Agent 3's tool-calling workflow.")
+    parser = argparse.ArgumentParser(description="Test Agent 3's classic ReAct workflow.")
     parser.add_argument(
         "--interview",
         metavar="APPLICATION_ID",
@@ -39,12 +39,18 @@ def main() -> int:
 
     selected_path = _select_cv()
     location = input("LinkedIn location (leave empty for any location): ").strip()
+    delivery = input(
+        "Delivery after the ReAct run (gmail / telegram / leave empty): "
+    ).strip().lower()
+    if delivery not in {"", "gmail", "telegram"}:
+        raise ValueError("Delivery must be 'gmail', 'telegram', or empty.")
 
-    print("\n=== FULL LINKEDIN AGENT 3 WORKFLOW ===")
+    print("\n=== CLASSIC REACT LINKEDIN AGENT 3 WORKFLOW ===")
     result = run_agent3_full_auto_from_pdf(
         str(selected_path),
         results_count=3,
         location=location,
+        delivery_channel=delivery or None,
     )
     cv_info = result["cv_info"]
     print(
@@ -56,6 +62,9 @@ def main() -> int:
     print(f"CV extraction: {result['cv_extraction_backend']}\n")
     for warning in result.get("cv_extraction_warnings", []):
         print(f"CV extraction warning: {warning}")
+    print("ReAct action/observation trace:")
+    for index, step in enumerate(result.get("react_trace", []), start=1):
+        print(f"  {index}. {step['tool']} <- {step['input']}")
     print(result["output"])
     for row in result.get("tracked_applications", []):
         print(f"Tracked application {row['application_id']}: {row['url']}")
