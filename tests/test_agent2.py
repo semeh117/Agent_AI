@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -21,8 +17,7 @@ load_dotenv()
 
 import next_chapter.agents.agent2 as agent2_workflow
 import next_chapter.agents.agent2_interview as agent2_interview
-from next_chapter.parsing.agent2_cv_parser import Agent2CVInfo
-from tests.support.agent2_fakes import _fake_cv, _fake_ranked_result, _FakeAgentLLM, _inject_workflow_fakes, _ManualMonkeyPatch
+from tests.support.agent2_fakes import _fake_cv, _fake_ranked_result, _inject_workflow_fakes, _ManualMonkeyPatch
 from next_chapter.storage.agent2_checkpointer import Agent2SqliteSaver
 
 

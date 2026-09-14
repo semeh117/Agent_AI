@@ -355,32 +355,6 @@ def _invoke_agent3(
     return result, context
 
 
-def run_agent3_job_matching(
-    cv_info: Any,
-    results_count: int = 3,
-    location: str = "",
-    verbose: bool = True,
-    query: str = "",
-    search_pool_size: int | None = None,
-    workflow_id: str | None = None,
-) -> dict[str, Any]:
-    """Run the ReAct search/evaluate/gap/cover workflow without delivery."""
-
-    _reset_agent3_state(cv_info)
-    result, context = _invoke_agent3(
-        cv_info,
-        results_count,
-        location,
-        verbose,
-        query=query,
-        search_pool_size=search_pool_size,
-    )
-    result = _finalize_agent3_result(result, context)
-    result["workflow_id"] = workflow_id or str(uuid4())
-    result["cv_info"] = cv_info
-    return result
-
-
 def run_agent3_full_auto(
     cv_info: Any,
     results_count: int = 3,

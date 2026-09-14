@@ -82,31 +82,3 @@ def set_cached(namespace: str, text: str, result: BaseModel) -> None:
     finally:
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
-
-
-def clear_cache(namespace: Optional[str] = None) -> int:
-    """
-    Deletes cached entries. Pass a namespace ('cv' or 'job') to clear
-    only that one, or omit to clear everything. Returns count deleted.
-    Useful after a prompt change — old cached results were extracted
-    under the OLD prompt wording and won't reflect prompt improvements
-    (like the grounding/experience-year fixes) until re-extracted.
-    """
-    import shutil
-    target = CACHE_DIR / namespace if namespace else CACHE_DIR
-    if not target.exists():
-        return 0
-    count = sum(1 for _ in target.rglob("*.json"))
-    shutil.rmtree(target)
-    return count
-
-
-def cache_stats() -> dict:
-    """Quick visibility into what's cached — counts entries per namespace."""
-    if not CACHE_DIR.exists():
-        return {}
-    stats = {}
-    for namespace_dir in CACHE_DIR.iterdir():
-        if namespace_dir.is_dir():
-            stats[namespace_dir.name] = len(list(namespace_dir.glob("*.json")))
-    return stats

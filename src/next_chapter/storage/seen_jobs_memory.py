@@ -12,16 +12,13 @@ repeat run surfaces something new instead of the same results, and
 category-based search, if everything the API returns has already been
 seen before.
 
-Scoped per-candidate (by email) — unlike skill_memory.py, which is
-deliberately GLOBAL. A job being already-shown to candidate A must not
-hide it from candidate B; identity here is the point, not the skill
-relationship.
+The records are scoped per candidate email, so a job shown to one candidate
+does not disappear from another candidate's results.
 """
 
 import sqlite3
-from pathlib import Path
 from next_chapter.paths import CACHE_DIR
-from typing import List, Set
+from typing import Set
 
 DB_PATH = CACHE_DIR / "seen_jobs_memory.db"
 
@@ -96,27 +93,5 @@ def record_seen(candidate_email: str, job_url: str, job_title: str, company: str
              score_percent, json.dumps(matching_skills), json.dumps(missing_skills)),
         )
         conn.commit()
-    finally:
-        conn.close()
-
-
-def clear_seen(candidate_email: str = None) -> int:
-    """
-    Deletes seen-job records. Pass a candidate_email to wipe just that
-    candidate's history, or omit to wipe EVERYONE's — useful for starting
-    a clean dev/test slate rather than manually deleting the DB file.
-    Returns the number of rows deleted.
-    """
-    conn = _get_connection()
-    try:
-        if candidate_email:
-            cursor = conn.execute(
-                "DELETE FROM seen_jobs WHERE candidate_email = ?",
-                (candidate_email.strip().lower(),),
-            )
-        else:
-            cursor = conn.execute("DELETE FROM seen_jobs")
-        conn.commit()
-        return cursor.rowcount
     finally:
         conn.close()

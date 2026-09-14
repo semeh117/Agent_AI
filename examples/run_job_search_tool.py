@@ -1,7 +1,5 @@
-# examples/run_job_search_tool.py
-"""
-test_job_search_tool.py
---------------
+"""Live check for the Agent 1 job-search tool.
+
 Verifies search_jobs_for_agent (src/next_chapter/agents/tools/job_search_tool.py) actually
 surfaces the already-seen-jobs signal in its Observation, so the agent
 can reason about it — this is the whole point of the memory feature.
@@ -18,7 +16,6 @@ Uses a throwaway fake candidate email, cleaned up at the end — safe to
 run repeatedly.
 """
 
-import sys, os
 from dotenv import load_dotenv
 load_dotenv()
 

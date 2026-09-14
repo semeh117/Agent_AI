@@ -20,7 +20,6 @@ stage/
 │   │   ├── support.py             CV uploads and sample data
 │   │   └── assets/workspace.css   Packaged interface styles
 │   ├── agents/                    Agent 1, 2, 3 and the interview graph
-│   │   ├── agent1_support.py      Agent 1 ReAct foundation
 │   │   ├── react_output_parser.py Tolerant textual ReAct parsing
 │   │   └── tools/                 Agent-facing adapters and Agent 3 run tools
 │   ├── parsing/                   PDF text extraction and parser schemas

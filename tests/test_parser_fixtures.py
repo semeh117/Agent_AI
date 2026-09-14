@@ -9,10 +9,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-from next_chapter.parsing.agent2_parser import (
-    _looks_like_contextual_cv_skill,
-    _required_alternative_groups,
-)
+from next_chapter.parsing.agent2_cv_rules import _looks_like_contextual_cv_skill
+from next_chapter.parsing.agent2_job_rules import _required_alternative_groups
 from evaluation.replay_parser_fixtures import replay_cv, replay_jobs
 from next_chapter.search.linkedin import _clean_text
 

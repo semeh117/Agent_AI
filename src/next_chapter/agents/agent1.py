@@ -1,32 +1,18 @@
-"""
-agent1.py
---------------
-PATH B — fully agent-driven. The LLM itself decides, as further steps
-in its own ReAct loop, when to write the cover letter, when to ask the
-candidate which delivery channel they prefer (Gmail draft or Telegram
-message), and when to deliver — the same way it already decides to
-search and evaluate.
+"""Original text-based ReAct workflow kept for agent comparisons.
 
-OBSERVED FAILURE MODE (kept here deliberately, not smoothed over): in
-testing with qwen-2.5-7b-instruct, the model has twice produced a Final
-Answer confidently claiming "a Gmail draft has been created" while its
-own intermediate_steps show send_results_draft was never actually
-called. The verification block in run_agent1() below is a
-fallback that catches this and completes the step for real — meaning
-this path currently only works BECAUSE of that fallback, not because
-the agent reliably follows the prompted workflow. Compare against
-agent1_deterministic.py, which has no equivalent failure mode since
-nothing past ranking is left to the LLM's judgment.
+The model chooses the search, evaluation, cover-letter, and delivery tools.
+The deterministic completion guard verifies those side effects and repairs a
+skipped or incorrect final step before returning the result.
 """
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
 from next_chapter.config import get_agent_llm
-from next_chapter.agents.agent1_support import TOOLS
 from next_chapter.agents.react_output_parser import RequiredToolsVerifyingParser
+from next_chapter.agents.tools.job_search_tool import search_jobs_for_agent
 import next_chapter.agents.tools.job_evaluator as job_evaluator  # module import — need the
 # LIVE _current_cv_info / _all_evaluations, only set at runtime.
-from next_chapter.agents.tools.job_evaluator import set_candidate_profile
+from next_chapter.agents.tools.job_evaluator import evaluate_job_match, set_candidate_profile
 from next_chapter.agents.tools.cover_letter import write_cover_letter
 import next_chapter.agents.tools.cover_letter as cover_letter_tool
 from next_chapter.agents.tools.gmail import send_results_draft
@@ -36,7 +22,7 @@ import next_chapter.agents.tools.delivery_choice as delivery_choice
 import next_chapter.search.himalayas as job_search
 
 TOOLS_WITH_COVER_LETTER_AND_DELIVERY = (
-    TOOLS
+    [search_jobs_for_agent, evaluate_job_match]
     + [write_cover_letter, ask_user_delivery_channel, send_results_draft, send_results_telegram]
 )
 

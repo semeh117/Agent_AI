@@ -17,12 +17,10 @@ from next_chapter.parsing.agent2_parser_common import (
 )
 from next_chapter.parsing.agent2_cv_parser import (
     Agent2CVInfo,
-    _looks_like_contextual_cv_skill,
     extract_cv_info_agent2,
 )
 from next_chapter.parsing.agent2_job_parser import (
     Agent2JobRequirements,
-    _required_alternative_groups,
     extract_job_requirements_agent2,
 )
 

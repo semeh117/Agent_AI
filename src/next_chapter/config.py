@@ -1,9 +1,4 @@
-"""Centralized factories for chat and embedding models.
-
-``get_llm`` remains for the legacy Agent 1 pipeline. Parser, query/tool
-orchestration, cover-letter, and embedding workloads use role-specific
-factories so changing one model does not silently change every workflow.
-"""
+"""Centralized factories for role-specific chat and embedding models."""
 from functools import lru_cache
 import os
 from dotenv import load_dotenv
@@ -11,7 +6,6 @@ from next_chapter.paths import PROJECT_ROOT
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter").lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 EMBEDDING_LOCAL_ONLY = os.getenv("EMBEDDING_LOCAL_ONLY", "false").strip().lower() in {
     "1",
@@ -114,16 +108,6 @@ def _model_for_provider(provider: str) -> str:
     if provider not in defaults:
         raise ValueError(f"Unknown LLM provider: {provider}")
     return os.getenv(f"{provider.upper()}_MODEL", defaults[provider])
-
-
-def get_llm(temperature: float = 0.0):
-    """Backwards-compatible Agent 1/global model factory."""
-
-    return _build_llm(
-        provider=LLM_PROVIDER,
-        model=_model_for_provider(LLM_PROVIDER),
-        temperature=temperature,
-    )
 
 
 def get_parser_llm(temperature: float = 0.0):

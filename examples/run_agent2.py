@@ -1,6 +1,5 @@
 """Interactive Agent 2 demo; may call providers and delivery services."""
 import argparse
-from pathlib import Path
 from next_chapter.paths import PROJECT_ROOT
 import next_chapter.agents.agent2 as agent2_workflow
 import next_chapter.agents.agent2_interview as agent2_interview

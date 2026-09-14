@@ -1,7 +1,5 @@
 """Deterministic tests for the one-job cosine compatibility matcher."""
 
-import os
-import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 from math import isclose

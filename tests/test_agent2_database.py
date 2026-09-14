@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 import sqlite3
-import sys
 import tempfile
 from types import SimpleNamespace
 
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from next_chapter.storage.agent2_database import (  # noqa: E402
     agent2_connection,

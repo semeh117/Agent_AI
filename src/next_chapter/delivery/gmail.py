@@ -38,8 +38,6 @@ from googleapiclient.discovery import build
 # intentionally calls only the draft-creation endpoint.
 SCOPES = ["https://www.googleapis.com/auth/gmail.compose"]
 
-from pathlib import Path
-
 from next_chapter.paths import PROJECT_ROOT as _PROJECT_ROOT
 CREDENTIALS_PATH = str(_PROJECT_ROOT / "credentials.json")
 TOKEN_PATH = str(_PROJECT_ROOT / "token.json")
